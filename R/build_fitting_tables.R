@@ -104,22 +104,30 @@ build_sporozoite_table <- function(dir = "data_private/fitting",
 
   out <- out[order(out$dissection_day, out$hours_after_infection,
                    out$n_bloodmeals, out$worksheet), ]
-  label_experiments(out, one_row_each = TRUE)
+  finalise_experiment_table(out, one_row_each = TRUE)
 }
 
-#' Give each experiment a number and a label
+#' Number the experiments, label them, and write the timing both ways round
 #'
 #' The fits index experiments by a number from one upwards. The label repeats
-#' the fields that define an experiment, so a row can be read without going
-#' back to the other columns, and is named for the fields it holds.
+#' the fields that define an experiment, so a row can be read without going back
+#' to the other columns, and is named for the fields it holds.
+#'
+#' The timing is also written counting backwards from the infectious blood meal,
+#' as `hours_before_infection`, because the file the blocking model was
+#' previously fitted from carried both. It is derived here rather than recorded,
+#' so the two can never disagree.
 #'
 #' @param x A table from [build_sporozoite_table()] or [build_oocyst_table()].
 #' @param one_row_each Whether each row is already one experiment.
 #'
-#' @return `x` with `experiment_id` and a labelled column added.
+#' @return `x` with `experiment_id`, `hours_before_infection` and a labelled
+#'   column added.
 #'
 #' @keywords internal
-label_experiments <- function(x, one_row_each) {
+finalise_experiment_table <- function(x, one_row_each) {
+  x$hours_before_infection <- -x$hours_after_infection
+  stopifnot(all(x$hours_after_infection + x$hours_before_infection == 0))
   label <- paste(x$workbook, x$worksheet, x$hours_after_infection,
                  x$n_bloodmeals, if (one_row_each) 1L else x$subgroup,
                  sep = " | ")

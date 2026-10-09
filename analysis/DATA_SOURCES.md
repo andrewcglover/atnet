@@ -71,6 +71,7 @@ the extrinsic incubation period:
 | `experiment_id` | 1 upwards, the index the fit gives its per-experiment effect |
 | `worksheet`, `control_column`, `treated_column`, `workbook` | where the row came from |
 | `hours_after_infection` | when the mosquitoes met the net, counted forward from the infectious blood meal |
+| `hours_before_infection` | the same, counted backwards; derived, and what the blocking model calls `pre_time` |
 | `dissection_day` | day the salivary glands were examined, from the worksheet name |
 | `n_bloodmeals` | one, or two where a second blood meal followed exposure |
 | `duration_min` | how long they rested on the net, where the worksheet varied it |
@@ -91,10 +92,10 @@ same quantity as the `post_time` column of the files these fits were previously
 given, and follows the supplementary information.
 
 The earlier oocyst file carried the same number twice, as `post_time` and as
-its negative `pre_time`, and the blocking model was fitted from the latter. So
-code reading that model's input expects the opposite sign to the column here,
-and must take `pre_time` as `-hours_after_infection`, or set its `side` and `s`
-from this column directly.
+its negative `pre_time`, and the blocking model was fitted from the latter.
+Both tables therefore also carry `hours_before_infection`, which is the
+blocking model's `pre_time`. It is derived from `hours_after_infection` rather
+than recorded, and checked, so the two can never come to disagree.
 
 ## Reconciliation
 

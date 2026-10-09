@@ -77,3 +77,15 @@ test_that("the workbooks are named for when they were received", {
   wb <- assay_workbooks()
   expect_true(all(grepl("^[0-9]{12}_", wb$file)))
 })
+
+test_that("the timing is written both ways round and they cannot disagree", {
+  x <- data.frame(
+    workbook = "w.xlsx", worksheet = "s", hours_after_infection = c(72, -24, 0),
+    n_bloodmeals = c(1L, 1L, 2L), subgroup = 1L, stringsAsFactors = FALSE
+  )
+  out <- finalise_experiment_table(x, one_row_each = TRUE)
+
+  expect_equal(out$hours_before_infection, c(-72, 24, 0))
+  expect_true(all(out$hours_after_infection + out$hours_before_infection == 0))
+  expect_equal(out$experiment_id, 1:3)
+})

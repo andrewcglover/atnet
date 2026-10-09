@@ -103,7 +103,7 @@ build_oocyst_table <- function(dir = "data_private/fitting",
 
   out <- out[order(out$worksheet, out$hours_after_infection, out$subgroup,
                    out$arm), ]
-  label_experiments(out, one_row_each = FALSE)
+  finalise_experiment_table(out, one_row_each = FALSE)
 }
 
 #' The concurrent-exposure experiments held in a separate workbook

@@ -1,0 +1,53 @@
+{
+  "r_min": {
+    "alpha": 0.5,
+    "beta": 0.5
+  },
+  "log_s_half": {
+    "mean": 0.6931471805599,
+    "sd": 1
+  },
+  "log_nH": {
+    "mean": 1.609437912434,
+    "sd": 1
+  },
+  "mu_L": {
+    "mean": 1,
+    "sd": 1.5
+  },
+  "mu_p": {
+    "mean": 2,
+    "sd": 1.5
+  },
+  "sigma_exp": {
+    "sd": 1
+  },
+  "reciprocal_phi": {
+    "sd": 1
+  },
+  "eip_floor": 7,
+  "log_eip_excess": {
+    "mean": 0.5986122886681,
+    "sd": 0.75
+  },
+  "r0_frac": {
+    "alpha": 0.5,
+    "beta": 0.5
+  },
+  "log_zeta": {
+    "mean": -0.7719780286898,
+    "sd": 0.75
+  },
+  "log_s_half_eip": {
+    "mean": 0.4054651081082,
+    "sd": 0.4
+  },
+  "log_nH_eip": {
+    "mean": 1.609437912434,
+    "sd": 0.4
+  },
+  "r0_frac_eip": {
+    "alpha": 2,
+    "beta": 5
+  }
+}

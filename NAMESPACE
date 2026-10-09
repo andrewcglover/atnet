@@ -2,9 +2,13 @@
 
 export(assay_corrections)
 export(assay_workbooks)
+export(atn_priors)
 export(build_oocyst_table)
 export(build_sporozoite_table)
 export(dissection_day)
+export(prior_stan_data)
 export(repeated_subgroups)
+export(sample_kernel_prior)
 export(tabulate_assay_sheet)
 export(tabulate_assay_workbook)
+export(write_priors_json)

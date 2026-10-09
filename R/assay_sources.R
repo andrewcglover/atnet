@@ -28,8 +28,9 @@ assay_workbooks <- function() {
 #' Corrections applied to the assay data
 #'
 #' Every departure from a plain reading of the workbooks, with the evidence for
-#' it. Each is applied by [clean_assays()] and reported in its output, so that
-#' no correction is silent.
+#' it. Each is applied by [build_sporozoite_table()] or [build_oocyst_table()],
+#' and `analysis/02_build_fitting_data.R` reports them all, so that no
+#' correction is silent.
 #'
 #' @return A data frame with one row per correction.
 #'

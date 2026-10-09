@@ -11,6 +11,7 @@ A data frame with one row per correction.
 }
 \description{
 Every departure from a plain reading of the workbooks, with the evidence for
-it. Each is applied by \code{\link[=clean_assays]{clean_assays()}} and reported in its output, so that
-no correction is silent.
+it. Each is applied by \code{\link[=build_sporozoite_table]{build_sporozoite_table()}} or \code{\link[=build_oocyst_table]{build_oocyst_table()}},
+and \verb{analysis/02_build_fitting_data.R} reports them all, so that no
+correction is silent.
 }

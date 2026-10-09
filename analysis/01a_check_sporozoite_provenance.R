@@ -9,7 +9,7 @@
 
 devtools::load_all(quiet = TRUE)
 
-raw_dir <- "data_private/raw/2026-05_exp_data"
+raw_dir <- "data_private/archive/raw/2026-05_exp_data"
 summary_path <- file.path(raw_dir, "SPZ_pooled_summary_APR26.csv")
 workbooks <- c(
   individual = "200mgPCLnetdata_individualreps.xlsx",
@@ -75,5 +75,6 @@ message(sprintf("\n%d of %d rows reproduced.", nrow(target) - length(unmatched),
                 nrow(target)))
 if (length(unmatched)) {
   message("Unreproduced rows: ", paste(unmatched, collapse = ", "),
-          ".\nSee the provenance notes before refitting.")
+          ".\nSee data_private/DATA_SOURCES.md for the corrections that ",
+          "explain them.")
 }

@@ -13,6 +13,7 @@ test_that("the worksheet name says whether exposure preceded infection", {
 test_that("arms are paired within a worksheet into one row per experiment", {
   tab <- data.frame(
     sheet = rep("w", 4),
+    column = c("CTL 72h 1BF", "200mg 72h 1BF", "CTL 72h 2BF", "200mg 72h 2BF"),
     arm = c("control", "treated", "control", "treated"),
     concentration = c(NA, 200, NA, 200),
     exposure_h = c(72, 72, 72, 72),
@@ -33,7 +34,8 @@ test_that("arms are paired within a worksheet into one row per experiment", {
 
 test_that("a treated arm at another concentration is not paired", {
   tab <- data.frame(
-    sheet = rep("w", 3), arm = c("control", "treated", "treated"),
+    sheet = rep("w", 3), column = c("CTL", "200mg", "100mg"),
+    arm = c("control", "treated", "treated"),
     concentration = c(NA, 200, 100), exposure_h = 0, duration_min = NA_real_,
     n_bloodmeals = 1L, subgroup = 1L, n = c(20L, 20L, 20L),
     n_positive = c(18L, 0L, 6L), stringsAsFactors = FALSE
@@ -46,7 +48,8 @@ test_that("a treated arm at another concentration is not paired", {
 
 test_that("an unpaired arm yields no row rather than a half row", {
   tab <- data.frame(
-    sheet = "w", arm = "control", concentration = NA_real_, exposure_h = 72,
+    sheet = "w", column = "CTL 72h 1BF", arm = "control",
+    concentration = NA_real_, exposure_h = 72,
     duration_min = NA_real_, n_bloodmeals = 1L, subgroup = 1L, n = 10L,
     n_positive = 5L, stringsAsFactors = FALSE
   )

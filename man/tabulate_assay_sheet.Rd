@@ -14,8 +14,9 @@ with the column headers in the first row and no row names.}
 }
 \value{
 A data frame with one row per sub-group, with columns \code{sheet},
-\code{arm}, \code{exposure_h}, \code{n_bloodmeals}, \code{subgroup} (its position within the
-column, counting from one), \code{n} and \code{n_positive}.
+\code{column} (the header it came from), \code{arm}, \code{concentration}, \code{exposure_h},
+\code{duration_min}, \code{n_bloodmeals}, \code{subgroup} (its position within the column,
+counting from one), \code{n} and \code{n_positive}.
 }
 \description{
 Tabulate the assay groups on one sheet

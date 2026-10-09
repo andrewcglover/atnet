@@ -74,6 +74,8 @@ pair_arms <- function(tab, concentration = 200) {
     }
     data.frame(
       worksheet = ctl$sheet,
+      control_column = ctl$column,
+      treated_column = trt$column,
       exposure_h = ctl$exposure_h,
       duration_min = ctl$duration_min,
       n_bloodmeals = ctl$n_bloodmeals,
@@ -89,7 +91,8 @@ pair_arms <- function(tab, concentration = 200) {
 
 empty_paired_table <- function() {
   data.frame(
-    worksheet = character(0), exposure_h = numeric(0), duration_min = numeric(0),
+    worksheet = character(0), control_column = character(0),
+    treated_column = character(0), exposure_h = numeric(0), duration_min = numeric(0),
     n_bloodmeals = integer(0), replicate = integer(0), n_control = integer(0),
     n_positive_control = integer(0), n_treated = integer(0),
     n_positive_treated = integer(0), stringsAsFactors = FALSE

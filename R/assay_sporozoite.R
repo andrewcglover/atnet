@@ -130,8 +130,9 @@ count_group <- function(x) {
 #' @param sheet_name Recorded in the result so that rows can be traced back.
 #'
 #' @return A data frame with one row per sub-group, with columns `sheet`,
-#'   `arm`, `exposure_h`, `n_bloodmeals`, `subgroup` (its position within the
-#'   column, counting from one), `n` and `n_positive`.
+#'   `column` (the header it came from), `arm`, `concentration`, `exposure_h`,
+#'   `duration_min`, `n_bloodmeals`, `subgroup` (its position within the column,
+#'   counting from one), `n` and `n_positive`.
 #'
 #' @export
 tabulate_assay_sheet <- function(sheet, sheet_name = NA_character_) {
@@ -154,6 +155,7 @@ tabulate_assay_sheet <- function(sheet, sheet_name = NA_character_) {
     counts <- vapply(groups, count_group, c(n = 0L, n_positive = 0L))
     data.frame(
       sheet = sheet_name,
+      column = gsub("\\s+", " ", trimws(headers[[j]])),
       arm = meta$arm,
       concentration = meta$concentration,
       exposure_h = meta$exposure_h,
@@ -172,7 +174,8 @@ tabulate_assay_sheet <- function(sheet, sheet_name = NA_character_) {
 
 empty_assay_table <- function() {
   data.frame(
-    sheet = character(0), arm = character(0), concentration = numeric(0),
+    sheet = character(0), column = character(0), arm = character(0),
+    concentration = numeric(0),
     exposure_h = numeric(0), duration_min = numeric(0),
     n_bloodmeals = integer(0), subgroup = integer(0), n = integer(0),
     n_positive = integer(0), stringsAsFactors = FALSE

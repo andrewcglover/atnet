@@ -1,0 +1,147 @@
+# Building the two tables the fits consume, from the workbooks in
+# data_private/fitting/.
+#
+# Each output row is one experiment: a control arm and a 200 mg/m2 arm from the
+# same infectious feed under one set of conditions, with the workbook, worksheet
+# and columns it came from. The corrections listed by assay_corrections() are
+# applied here and nowhere else.
+
+#' Collapse a worksheet of the per-replicate workbook to one group per column
+#'
+#' In that workbook a worksheet is one replicate, so the blank cells within a
+#' column do not separate experiments and the sub-groups belong together. Any
+#' sub-group repeating an earlier one is dropped first, since a repeat is the
+#' same mosquitoes entered twice rather than more of them.
+#'
+#' @param path Path to the workbook.
+#' @param sheet A worksheet name.
+#'
+#' @return A table in the form of [tabulate_assay_sheet()], with one row per
+#'   column and `subgroup` set to one.
+#'
+#' @keywords internal
+collapse_replicate_sheet <- function(path, sheet) {
+  raw <- suppressMessages(readxl::read_excel(path, sheet = sheet,
+                                             col_names = FALSE,
+                                             col_types = "text",
+                                             .name_repair = "minimal"))
+  tab <- tabulate_assay_sheet(raw, sheet)
+  if (!nrow(tab)) {
+    return(tab)
+  }
+
+  # Matched against tab$column, which is normalised, so normalise here too.
+  headers <- gsub("\\s+", " ", trimws(as.character(unlist(raw[1L, ],
+                                                          use.names = FALSE))))
+  body <- raw[-1L, , drop = FALSE]
+  drop <- lapply(seq_along(headers), function(j) {
+    groups <- split_at_blanks(as.character(body[[j]]))
+    if (length(groups) < 2L) {
+      return(NULL)
+    }
+    rep_idx <- repeated_subgroups(groups)
+    if (!length(rep_idx)) {
+      return(NULL)
+    }
+    data.frame(column = headers[[j]], subgroup = rep_idx, stringsAsFactors = FALSE)
+  })
+  drop <- do.call(rbind, drop)
+  if (!is.null(drop)) {
+    keep <- !paste(tab$column, tab$subgroup) %in% paste(drop$column, drop$subgroup)
+    tab <- tab[keep, , drop = FALSE]
+  }
+
+  key <- paste(tab$column, tab$arm, tab$concentration, tab$exposure_h,
+               tab$duration_min, tab$n_bloodmeals, sep = "\r")
+  out <- lapply(split(tab, key), function(g) {
+    first <- g[1L, ]
+    first$subgroup <- 1L
+    first$n <- sum(g$n)
+    first$n_positive <- sum(g$n_positive)
+    first
+  })
+  do.call(rbind, out)
+}
+
+#' Build the sporozoite table for the extrinsic incubation period fit
+#'
+#' @param dir Folder holding the workbooks, normally `data_private/fitting`.
+#' @param concentration Fit only treated arms at this concentration.
+#'
+#' @return A data frame with one row per experiment.
+#'
+#' @export
+build_sporozoite_table <- function(dir = "data_private/fitting",
+                                   concentration = 200) {
+  wb <- assay_workbooks()
+  per_replicate <- file.path(dir, wb$file[grepl("individualreps", wb$file)])
+  pooled <- file.path(dir, wb$file[grepl("pooledreps", wb$file)])
+
+  sheets <- readxl::excel_sheets(per_replicate)
+  sheets <- sheets[grepl("spz", sheets)]
+  # Holds a copy of another worksheet; the genuine replicate is taken from the
+  # pooled workbook below.
+  sheets <- setdiff(sheets, "72h 2BF post 09.07.26 spz10")
+
+  rows <- lapply(sheets, function(s) {
+    paired <- pair_arms(collapse_replicate_sheet(per_replicate, s), concentration)
+    if (!nrow(paired)) {
+      return(NULL)
+    }
+    paired$workbook <- basename(per_replicate)
+    paired$dissection_day <- dissection_day(s)
+    paired
+  })
+  out <- do.call(rbind, rows)
+  out <- rbind(out, missing_day10_replicate(pooled))
+
+  out$exposure_h <- out$exposure_h * ifelse(grepl("post", out$worksheet,
+                                                  ignore.case = TRUE), -1, 1)
+  out$replicate <- NULL
+  out[order(out$dissection_day, out$exposure_h, out$n_bloodmeals, out$worksheet), ]
+}
+
+#' The day-10 replicate held only in the pooled workbook
+#'
+#' One replicate was entered in the pooled workbook but not in the
+#' per-replicate one, whose corresponding worksheet holds a copy of an earlier
+#' replicate instead. It is the last group down each column of
+#' `#7 72h post spz10`. The counts are checked against the values that make the
+#' two workbooks reconcile, so a changed workbook raises an error rather than
+#' passing silently.
+#'
+#' @param pooled Path to the pooled workbook.
+#'
+#' @return A one-worksheet data frame in the form of [build_sporozoite_table()].
+#'
+#' @keywords internal
+missing_day10_replicate <- function(pooled) {
+  tab <- tabulate_assay_workbook(pooled, "#7 72h post spz10")
+  last <- do.call(rbind, lapply(
+    split(tab, paste(tab$column, tab$n_bloodmeals)),
+    function(g) g[which.max(g$subgroup), ]))
+
+  expected <- list(c(1, 12, 5, 12, 1), c(2, 12, 11, 12, 4))
+  out <- lapply(expected, function(e) {
+    ctl <- last[last$arm == "control" & last$n_bloodmeals == e[1], ]
+    trt <- last[last$arm == "treated" & last$n_bloodmeals == e[1], ]
+    stopifnot(nrow(ctl) == 1L, nrow(trt) == 1L)
+    if (!identical(c(ctl$n, ctl$n_positive, trt$n, trt$n_positive),
+                   as.integer(e[-1]))) {
+      stop("The last group of '#7 72h post spz10' is not the replicate this ",
+           "correction was written for. Re-check the workbook against ",
+           "analysis/DATA_SOURCES.md before fitting.", call. = FALSE)
+    }
+    data.frame(
+      worksheet = "#7 72h post spz10",
+      control_column = ctl$column, treated_column = trt$column,
+      exposure_h = 72, duration_min = NA_real_,
+      n_bloodmeals = as.integer(e[1]), replicate = 4L,
+      n_control = ctl$n, n_positive_control = ctl$n_positive,
+      n_treated = trt$n, n_positive_treated = trt$n_positive,
+      workbook = basename(pooled), dissection_day = 10L,
+      stringsAsFactors = FALSE
+    )
+  })
+  do.call(rbind, out)
+}

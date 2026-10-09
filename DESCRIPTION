@@ -3,14 +3,14 @@ Title: Antimalarial-Treated Net Effects from Laboratory Assays to Malaria
     Impact
 Version: 0.0.0.9000
 Authors@R: 
-    person("Andrew", "Glover", , "a.glover18@imperial.ac.uk", role = c("aut", "cre"))
+    person(c("Andrew", "C"), "Glover", , "a.glover18@imperial.ac.uk", role = c("aut", "cre"),
+           comment = c(ORCID = "0000-0002-7235-7231"))
 Description: Fits the effects of antimalarial-treated nets on Plasmodium
     falciparum development in Anopheles mosquitoes (transmission blocking
     and lengthening of the extrinsic incubation period) to laboratory
     assay data, and projects their impact on malaria using a customised
     version of malariasimulation.
-License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
-    license
+License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3

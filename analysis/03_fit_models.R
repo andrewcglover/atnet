@@ -12,7 +12,8 @@
 #
 # Each run writes to outputs/fits/<YYYYMMDD_HHMM>/ (with "_smoke" appended for a
 # smoke run), for each model:
-#   <model>.rds              the stanfit object
+#   <model>.rds              the stanfit object (every draw)
+#   <model>_data.rds         the exact data list the model was given
 #   <model>_priors.json      the priors it was fitted with
 #   <model>_diagnostics.txt  sampler diagnostics and parameter summaries
 #   <model>_trace.png, <model>_pairs.png, <model>_ppc.png
@@ -120,6 +121,10 @@ for (model in models) {
 
   path <- function(suffix) file.path(out_dir, paste0(model, suffix))
   saveRDS(fit, path(".rds"))
+  data <- switch(spec$data, eip = eip_stan_data(table),
+                 tra = blocking_stan_data(table, "tra"),
+                 tba_lab = blocking_stan_data(table, "tba_lab"))
+  saveRDS(data, path("_data.rds"))
   write_priors_json(path("_priors.json"))
 
   summ <- rstan::summary(fit, pars = spec$key)$summary
@@ -165,9 +170,6 @@ for (model in models) {
   ggsave(path("_pairs.png"),
          mcmc_pairs(arr, off_diag_args = list(size = 0.4, alpha = 0.25)),
          width = 10, height = 10, dpi = 200)
-  data <- switch(spec$data, eip = eip_stan_data(table),
-                 tra = blocking_stan_data(table, "tra"),
-                 tba_lab = blocking_stan_data(table, "tba_lab"))
   ggsave(path("_ppc.png"), ppc_plot(fit, model, data),
          width = 11, height = 5, dpi = 200)
 

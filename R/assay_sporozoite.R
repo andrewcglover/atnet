@@ -7,29 +7,41 @@
 
 #' Interpret an assay column header
 #'
-#' Headers name the arm, the time of net exposure relative to the infectious
-#' blood meal, and the number of blood meals, for example `"CTL 72h 1BF"` or
-#' `"200mg 6d"`. Where the number of blood meals is absent it is taken to be
-#' one.
+#' Headers name the arm and, where they vary, the concentration on the net, the
+#' time of exposure relative to the infectious blood meal, how long the
+#' mosquitoes rested on the net, and the number of blood meals. For example
+#' `"CTL 72h 1BF"`, `"200mg 6d"`, `"CTL 12hr"`, `"1min 200mg"`.
+#'
+#' Several fields are routinely absent and are then `NA`, to be supplied by the
+#' worksheet name rather than guessed here. In particular a header carrying no
+#' time, such as `"200mg"`, leaves `exposure_h` as `NA`.
+#'
+#' Minutes denote how long the mosquitoes rested on the net, not when they were
+#' exposed. The standard protocol is six minutes, and only the worksheet
+#' `"#2 6,3,1 min exposure pre"` departs from it, so `duration_min` is `NA`
+#' unless the header says otherwise.
 #'
 #' @param header A single column header, which may contain line breaks.
 #'
 #' @return A list with elements `arm` (`"control"`, `"treated"` or `NA` for a
-#'   column that is not an assay group), `exposure_h` (hours after the
-#'   infectious blood meal, negative for exposure before it) and
-#'   `n_bloodmeals`.
+#'   column that is not an assay group), `concentration` (mg per square metre on
+#'   the net, `NA` for a control), `exposure_h` (hours after the infectious
+#'   blood meal, negative before it), `duration_min` and `n_bloodmeals`.
 #'
 #' @keywords internal
 parse_assay_header <- function(header) {
   tokens <- strsplit(gsub("\\s+", " ", trimws(header)), " ", fixed = TRUE)[[1]]
-  blank <- list(arm = NA_character_, exposure_h = NA_real_, n_bloodmeals = NA_integer_)
+  blank <- list(arm = NA_character_, concentration = NA_real_,
+                exposure_h = NA_real_, duration_min = NA_real_,
+                n_bloodmeals = NA_integer_)
   if (!length(tokens)) {
     return(blank)
   }
 
+  dose_token <- tokens[grepl("^[0-9.]+mg(/m2)?$", tokens, ignore.case = TRUE)]
   arm <- if (any(grepl("^CTL$", tokens, ignore.case = TRUE))) {
     "control"
-  } else if (any(grepl("^[0-9.]+mg$", tokens, ignore.case = TRUE))) {
+  } else if (length(dose_token)) {
     "treated"
   } else {
     NA_character_
@@ -38,12 +50,26 @@ parse_assay_header <- function(header) {
     return(blank)
   }
 
-  time_token <- tokens[grepl("^-?[0-9.]+[hd]$", tokens)]
+  concentration <- if (arm == "treated") {
+    as.numeric(sub("mg(/m2)?$", "", dose_token[[1]], ignore.case = TRUE))
+  } else {
+    NA_real_
+  }
+
+  # Hours or days, written h, hr, hrs or d.
+  time_token <- tokens[grepl("^-?[0-9.]+(h|hr|hrs|d)$", tokens, ignore.case = TRUE)]
   exposure_h <- if (!length(time_token)) {
     NA_real_
   } else {
-    value <- as.numeric(sub("[hd]$", "", time_token[[1]]))
-    if (grepl("d$", time_token[[1]])) value * 24 else value
+    value <- as.numeric(sub("(h|hr|hrs|d)$", "", time_token[[1]], ignore.case = TRUE))
+    if (grepl("d$", time_token[[1]], ignore.case = TRUE)) value * 24 else value
+  }
+
+  min_token <- tokens[grepl("^[0-9.]+(min|mins)$", tokens, ignore.case = TRUE)]
+  duration_min <- if (length(min_token)) {
+    as.numeric(sub("(min|mins)$", "", min_token[[1]], ignore.case = TRUE))
+  } else {
+    NA_real_
   }
 
   bf_token <- tokens[grepl("^[0-9]BF$", tokens, ignore.case = TRUE)]
@@ -53,7 +79,8 @@ parse_assay_header <- function(header) {
     1L
   }
 
-  list(arm = arm, exposure_h = exposure_h, n_bloodmeals = n_bloodmeals)
+  list(arm = arm, concentration = concentration, exposure_h = exposure_h,
+       duration_min = duration_min, n_bloodmeals = n_bloodmeals)
 }
 
 #' Split a column into sub-groups at its blank cells
@@ -128,7 +155,9 @@ tabulate_assay_sheet <- function(sheet, sheet_name = NA_character_) {
     data.frame(
       sheet = sheet_name,
       arm = meta$arm,
+      concentration = meta$concentration,
       exposure_h = meta$exposure_h,
+      duration_min = meta$duration_min,
       n_bloodmeals = meta$n_bloodmeals,
       subgroup = seq_along(groups),
       n = as.integer(counts["n", ]),
@@ -143,7 +172,8 @@ tabulate_assay_sheet <- function(sheet, sheet_name = NA_character_) {
 
 empty_assay_table <- function() {
   data.frame(
-    sheet = character(0), arm = character(0), exposure_h = numeric(0),
+    sheet = character(0), arm = character(0), concentration = numeric(0),
+    exposure_h = numeric(0), duration_min = numeric(0),
     n_bloodmeals = integer(0), subgroup = integer(0), n = integer(0),
     n_positive = integer(0), stringsAsFactors = FALSE
   )

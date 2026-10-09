@@ -3,9 +3,11 @@
 
 test_that("headers give the arm, exposure time and blood meals", {
   expect_equal(parse_assay_header("CTL 72h 1BF"),
-               list(arm = "control", exposure_h = 72, n_bloodmeals = 1L))
+               list(arm = "control", concentration = NA_real_, exposure_h = 72,
+                    duration_min = NA_real_, n_bloodmeals = 1L))
   expect_equal(parse_assay_header("200mg 72h 2BF"),
-               list(arm = "treated", exposure_h = 72, n_bloodmeals = 2L))
+               list(arm = "treated", concentration = 200, exposure_h = 72,
+                    duration_min = NA_real_, n_bloodmeals = 2L))
 })
 
 test_that("a missing blood meal count means one blood meal", {
@@ -16,9 +18,39 @@ test_that("exposure in days is converted to hours", {
   expect_equal(parse_assay_header("200mg 6d")$exposure_h, 144)
 })
 
+test_that("hours written hr or hrs are read as hours", {
+  expect_equal(parse_assay_header("CTL 12hr")$exposure_h, 12)
+  expect_equal(parse_assay_header("200mg 0hr")$exposure_h, 0)
+})
+
+test_that("a header with no time leaves the exposure time missing", {
+  # Supplied by the worksheet name instead of guessed here.
+  expect_true(is.na(parse_assay_header("200mg")$exposure_h))
+  expect_equal(parse_assay_header("200mg")$arm, "treated")
+})
+
+test_that("the concentration on the net is read, and is absent for a control", {
+  expect_equal(parse_assay_header("100mg")$concentration, 100)
+  expect_equal(parse_assay_header("200mg/m2")$concentration, 200)
+  expect_equal(parse_assay_header("400mg 24h")$concentration, 400)
+  expect_true(is.na(parse_assay_header("CTL 24h")$concentration))
+})
+
+test_that("minutes are read as a resting duration, not an exposure time", {
+  h <- parse_assay_header("1min 200mg")
+  expect_equal(h$duration_min, 1)
+  expect_true(is.na(h$exposure_h))
+  expect_equal(parse_assay_header("6min CTL")$duration_min, 6)
+})
+
+test_that("the resting duration is missing unless the header gives one", {
+  expect_true(is.na(parse_assay_header("CTL 72h 1BF")$duration_min))
+})
+
 test_that("line breaks within a header are tolerated", {
   expect_equal(parse_assay_header("CTL\n72h\n1BF"),
-               list(arm = "control", exposure_h = 72, n_bloodmeals = 1L))
+               list(arm = "control", concentration = NA_real_, exposure_h = 72,
+                    duration_min = NA_real_, n_bloodmeals = 1L))
 })
 
 test_that("a column that is not an assay group is ignored", {

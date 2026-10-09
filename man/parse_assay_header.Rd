@@ -11,14 +11,24 @@ parse_assay_header(header)
 }
 \value{
 A list with elements \code{arm} (\code{"control"}, \code{"treated"} or \code{NA} for a
-column that is not an assay group), \code{exposure_h} (hours after the
-infectious blood meal, negative for exposure before it) and
-\code{n_bloodmeals}.
+column that is not an assay group), \code{concentration} (mg per square metre on
+the net, \code{NA} for a control), \code{exposure_h} (hours after the infectious
+blood meal, negative before it), \code{duration_min} and \code{n_bloodmeals}.
 }
 \description{
-Headers name the arm, the time of net exposure relative to the infectious
-blood meal, and the number of blood meals, for example \code{"CTL 72h 1BF"} or
-\code{"200mg 6d"}. Where the number of blood meals is absent it is taken to be
-one.
+Headers name the arm and, where they vary, the concentration on the net, the
+time of exposure relative to the infectious blood meal, how long the
+mosquitoes rested on the net, and the number of blood meals. For example
+\code{"CTL 72h 1BF"}, \code{"200mg 6d"}, \code{"CTL 12hr"}, \code{"1min 200mg"}.
+}
+\details{
+Several fields are routinely absent and are then \code{NA}, to be supplied by the
+worksheet name rather than guessed here. In particular a header carrying no
+time, such as \code{"200mg"}, leaves \code{exposure_h} as \code{NA}.
+
+Minutes denote how long the mosquitoes rested on the net, not when they were
+exposed. The standard protocol is six minutes, and only the worksheet
+\code{"#2 6,3,1 min exposure pre"} departs from it, so \code{duration_min} is \code{NA}
+unless the header says otherwise.
 }
 \keyword{internal}

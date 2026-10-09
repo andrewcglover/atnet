@@ -7,8 +7,8 @@
 assay_workbooks()
 }
 \value{
-A data frame with one row per workbook, giving the file name, when it
-was received, who sent it, and which fits it feeds.
+A data frame with one row per workbook, giving its role, its name
+without the time it was received, its layout, and which fits it feeds.
 }
 \description{
 The workbooks the fits are built from

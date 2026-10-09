@@ -73,9 +73,17 @@ test_that("every correction carries its evidence", {
   expect_true(all(cr$applies_to %in% c("sporozoite", "oocyst", "both")))
 })
 
-test_that("the workbooks are named for when they were received", {
-  wb <- assay_workbooks()
-  expect_true(all(grepl("^[0-9]{12}_", wb$file)))
+test_that("a workbook is found by its name after the time it was received", {
+  dir <- withr::local_tempdir()
+  file.create(file.path(dir, c("202001010000_200mgPCLnetdata_pooledreps.xlsx",
+                               "200mgPCLnetdata_individualreps.xlsx")))
+  expect_equal(basename(find_workbook(dir, "pooled")),
+               "202001010000_200mgPCLnetdata_pooledreps.xlsx")
+  # Without the time prefix the file is not taken.
+  expect_error(find_workbook(dir, "per_replicate"), "found 0")
+  file.create(file.path(dir, "202002020000_200mgPCLnetdata_pooledreps.xlsx"))
+  expect_error(find_workbook(dir, "pooled"), "found 2")
+  expect_error(find_workbook(dir, "nonsense"), "Unknown workbook role")
 })
 
 test_that("the timing is written both ways round and they cannot disagree", {

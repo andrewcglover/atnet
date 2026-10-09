@@ -62,9 +62,8 @@ assay_values <- function(path, sheet) {
 #' @export
 build_oocyst_table <- function(dir = "data_private/fitting",
                                concentration = 200, duration = 6) {
-  wb <- assay_workbooks()
-  pooled <- file.path(dir, wb$file[grepl("pooledreps", wb$file)])
-  extra <- file.path(dir, wb$file[grepl("0h_exposure", wb$file)])
+  pooled <- find_workbook(dir, "pooled")
+  extra <- find_workbook(dir, "zero_hour")
 
   sheets <- readxl::excel_sheets(pooled)
   sheets <- sheets[grepl(" int$| exposure pre$", sheets)]
@@ -81,7 +80,7 @@ build_oocyst_table <- function(dir = "data_private/fitting",
     d$hours_after_infection <- d$exposure_h * ifelse(is.na(sign), 1, sign)
     d$exposure_h <- NULL
     # The first two sub-groups of the 72h one-blood-meal columns of this
-    # worksheet are one experiment (Saxena, 27 Apr 2026 16:29).
+    # worksheet are one experiment, as the laboratory confirmed in writing.
     if (s == "#5 6h 72h post int") {
       merge_me <- d$hours_after_infection == 72 & d$n_bloodmeals == 1L &
         d$subgroup <= 2L
@@ -110,7 +109,7 @@ build_oocyst_table <- function(dir = "data_private/fitting",
 #'
 #' This workbook carries one column pair per experiment, headed by its date.
 #' Its first two experiments are already in the pooled workbook and are dropped
-#' (Saxena, 27 Apr 2026 15:23).
+#' (as the laboratory confirmed in writing).
 #'
 #' @param path Path to the workbook.
 #'

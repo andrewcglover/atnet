@@ -15,6 +15,6 @@ A data frame with one row per mosquito.
 \description{
 This workbook carries one column pair per experiment, headed by its date.
 Its first two experiments are already in the pooled workbook and are dropped
-(Saxena, 27 Apr 2026 15:23).
+(as the laboratory confirmed in writing).
 }
 \keyword{internal}

@@ -2,7 +2,8 @@
 #
 # Each row carries the workbook, worksheet and columns it came from, so any
 # number can be traced back to a cell. The corrections applied are those listed
-# by assay_corrections() and in DATA_SOURCES.md, and nothing else.
+# by assay_corrections(), and nothing else; data_private/DATA_SOURCES.md gives
+# the evidence for each.
 #
 # Run with the working directory at the root of the package.
 
@@ -16,8 +17,7 @@ ooc <- build_oocyst_table()
 
 # The pooled workbook is an independent record of the same experiments, so it
 # must agree on how many mosquitoes exist once the corrections are applied.
-pooled <- file.path("data_private/fitting",
-                    assay_workbooks()$file[2])
+pooled <- find_workbook("data_private/fitting", "pooled")
 for (d in c(10, 13)) {
   sheet <- if (d == 10) "#7 72h post spz10" else "#8 72h post spz13"
   from_pooled <- sum(tabulate_assay_workbook(pooled, sheet)$n)
@@ -28,7 +28,7 @@ for (d in c(10, 13)) {
     stop(sprintf("72h exposures read at day %d: the pooled workbook has %d ",
                  d, from_pooled),
          sprintf("mosquitoes but this table has %d. Re-check against ", ours),
-         "analysis/DATA_SOURCES.md before fitting.", call. = FALSE)
+         "data_private/DATA_SOURCES.md before fitting.", call. = FALSE)
   }
   message(sprintf("72h exposures, day %2d: %d mosquitoes, agrees with the pooled workbook",
                   d, ours))

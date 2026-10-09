@@ -67,15 +67,18 @@ collapse_replicate_sheet <- function(path, sheet) {
 #'
 #' @param dir Folder holding the workbooks, normally `data_private/fitting`.
 #' @param concentration Fit only treated arms at this concentration.
+#' @param checks The counts [missing_day10_replicate()] expects, kept with the
+#'   data since they are data.
 #'
 #' @return A data frame with one row per experiment.
 #'
 #' @export
 build_sporozoite_table <- function(dir = "data_private/fitting",
-                                   concentration = 200) {
-  wb <- assay_workbooks()
-  per_replicate <- file.path(dir, wb$file[grepl("individualreps", wb$file)])
-  pooled <- file.path(dir, wb$file[grepl("pooledreps", wb$file)])
+                                   concentration = 200,
+                                   checks = file.path(dirname(dir),
+                                                      "expected_day10_replicate.csv")) {
+  per_replicate <- find_workbook(dir, "per_replicate")
+  pooled <- find_workbook(dir, "pooled")
 
   sheets <- readxl::excel_sheets(per_replicate)
   sheets <- sheets[grepl("spz", sheets)]
@@ -93,7 +96,7 @@ build_sporozoite_table <- function(dir = "data_private/fitting",
     paired
   })
   out <- do.call(rbind, rows)
-  out <- rbind(out, missing_day10_replicate(pooled))
+  out <- rbind(out, missing_day10_replicate(pooled, checks))
 
   # Counted forward from the infectious blood meal, as the supplementary
   # information and the fitting code do.
@@ -149,35 +152,46 @@ finalise_experiment_table <- function(x, one_row_each) {
 #' replicate instead. It is the last group down each column of
 #' `#7 72h post spz10`. The counts are checked against the values that make the
 #' two workbooks reconcile, so a changed workbook raises an error rather than
-#' passing silently.
+#' passing silently. Those values are data, so they are read from a file kept
+#' with the workbooks rather than written here.
 #'
 #' @param pooled Path to the pooled workbook.
+#' @param checks Path to a CSV with one row per number of blood meals, giving
+#'   `n_bloodmeals`, `n_control`, `n_positive_control`, `n_treated` and
+#'   `n_positive_treated` as this replicate should have them.
 #'
 #' @return A one-worksheet data frame in the form of [build_sporozoite_table()].
 #'
 #' @keywords internal
-missing_day10_replicate <- function(pooled) {
+missing_day10_replicate <- function(pooled, checks) {
+  if (!file.exists(checks)) {
+    stop("The expected counts for the day-10 replicate are missing: ", checks,
+         call. = FALSE)
+  }
+  expected <- utils::read.csv(checks)
+  stopifnot(nrow(expected) > 0L)
   tab <- tabulate_assay_workbook(pooled, "#7 72h post spz10")
   last <- do.call(rbind, lapply(
     split(tab, paste(tab$column, tab$n_bloodmeals)),
     function(g) g[which.max(g$subgroup), ]))
 
-  expected <- list(c(1, 12, 5, 12, 1), c(2, 12, 11, 12, 4))
-  out <- lapply(expected, function(e) {
-    ctl <- last[last$arm == "control" & last$n_bloodmeals == e[1], ]
-    trt <- last[last$arm == "treated" & last$n_bloodmeals == e[1], ]
+  out <- lapply(seq_len(nrow(expected)), function(i) {
+    e <- expected[i, ]
+    ctl <- last[last$arm == "control" & last$n_bloodmeals == e$n_bloodmeals, ]
+    trt <- last[last$arm == "treated" & last$n_bloodmeals == e$n_bloodmeals, ]
     stopifnot(nrow(ctl) == 1L, nrow(trt) == 1L)
     if (!identical(c(ctl$n, ctl$n_positive, trt$n, trt$n_positive),
-                   as.integer(e[-1]))) {
+                   as.integer(c(e$n_control, e$n_positive_control,
+                                e$n_treated, e$n_positive_treated)))) {
       stop("The last group of '#7 72h post spz10' is not the replicate this ",
            "correction was written for. Re-check the workbook against ",
-           "analysis/DATA_SOURCES.md before fitting.", call. = FALSE)
+           "data_private/DATA_SOURCES.md before fitting.", call. = FALSE)
     }
     data.frame(
       worksheet = "#7 72h post spz10",
       control_column = ctl$column, treated_column = trt$column,
       exposure_h = 72, duration_min = NA_real_,
-      n_bloodmeals = as.integer(e[1]), replicate = 4L,
+      n_bloodmeals = as.integer(e$n_bloodmeals), replicate = 4L,
       n_control = ctl$n, n_positive_control = ctl$n_positive,
       n_treated = trt$n, n_positive_treated = trt$n_positive,
       workbook = basename(pooled), dissection_day = 10L,

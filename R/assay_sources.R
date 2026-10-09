@@ -1,28 +1,54 @@
 # Where the fitted data come from, and the corrections applied on the way.
 #
-# Three workbooks feed the two fits. Each is named for when the email carrying
-# it was received, so that the data behind a fit can always be traced to a
-# message. They live in data_private/fitting/, which is not in this repository.
+# Three workbooks feed the two fits. They live in data_private/fitting/, which
+# is not in this repository, each prefixed with the time it was received
+# (YYYYMMDDhhmm), so the data behind a fit can be traced to the message that
+# carried it. Who sent each workbook, and the correspondence behind each
+# correction, are recorded in data_private/DATA_SOURCES.md, kept with the data.
 
 #' The workbooks the fits are built from
 #'
-#' @return A data frame with one row per workbook, giving the file name, when it
-#'   was received, who sent it, and which fits it feeds.
+#' @return A data frame with one row per workbook, giving its role, its name
+#'   without the time it was received, its layout, and which fits it feeds.
 #'
 #' @export
 assay_workbooks <- function() {
   data.frame(
-    file = c("202609181722_200mgPCLnetdata_individualreps.xlsx",
-             "202609181722_200mgPCLnetdata_pooledreps.xlsx",
-             "202604271323_200mgm2_ELQ-453_0h_exposure.xlsx"),
-    received = c("2026-09-18 17:22", "2026-09-18 17:22", "2026-04-27 13:23"),
-    sender = c("Aditi Saxena", "Aditi Saxena", "forwarded by A C Glover"),
+    role = c("per_replicate", "pooled", "zero_hour"),
+    name = c("200mgPCLnetdata_individualreps.xlsx",
+             "200mgPCLnetdata_pooledreps.xlsx",
+             "200mgm2_ELQ-453_0h_exposure.xlsx"),
     layout = c("one worksheet per replicate",
                "one worksheet per experimental design, replicates stacked",
                "one column pair per experiment, dated"),
     feeds = c("sporozoite", "sporozoite and oocyst", "oocyst"),
     stringsAsFactors = FALSE
   )
+}
+
+#' Find a workbook the fits are built from
+#'
+#' @param dir Folder holding the workbooks, normally `data_private/fitting`.
+#' @param role One of the roles in [assay_workbooks()].
+#'
+#' @return The path to the one file in `dir` with that workbook's name,
+#'   prefixed with the time it was received.
+#'
+#' @export
+find_workbook <- function(dir, role) {
+  wb <- assay_workbooks()
+  name <- wb$name[wb$role == role]
+  if (length(name) != 1L) {
+    stop("Unknown workbook role '", role, "'.", call. = FALSE)
+  }
+  files <- list.files(dir)
+  hits <- files[endsWith(files, paste0("_", name)) &
+                  grepl("^[0-9]{12}_", files)]
+  if (length(hits) != 1L) {
+    stop(sprintf("Expected one '<YYYYMMDDhhmm>_%s' in %s, found %d.",
+                 name, dir, length(hits)), call. = FALSE)
+  }
+  file.path(dir, hits)
 }
 
 #' Corrections applied to the assay data
@@ -52,13 +78,13 @@ assay_corrections <- function() {
       "Only the standard six-minute rest on the net is fitted, so the three and one minute arms of '#2 6,3,1 min exposure pre' are excluded. The model has no dimension for how long a mosquito rests."
     ),
     evidence = c(
-      "Saxena, 27 Apr 2026 15:23",
-      "Saxena, 27 Apr 2026 16:29",
+      "confirmed by the laboratory in writing",
+      "confirmed by the laboratory in writing",
       "identical values, verified",
       "identical values, verified; the pooled workbook reconciles only with this reading",
       "colour coding in the pooled workbook links the rows to a day 13 worksheet",
       "decision, A C Glover, 9 Oct 2026",
-      "model scope; Adams manuscript draft, 'our standard 6-minute exposure time'"
+      "model scope; six minutes is the laboratory's standard exposure"
     ),
     stringsAsFactors = FALSE
   )

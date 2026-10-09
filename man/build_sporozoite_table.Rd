@@ -4,12 +4,19 @@
 \alias{build_sporozoite_table}
 \title{Build the sporozoite table for the extrinsic incubation period fit}
 \usage{
-build_sporozoite_table(dir = "data_private/fitting", concentration = 200)
+build_sporozoite_table(
+  dir = "data_private/fitting",
+  concentration = 200,
+  checks = file.path(dirname(dir), "expected_day10_replicate.csv")
+)
 }
 \arguments{
 \item{dir}{Folder holding the workbooks, normally \code{data_private/fitting}.}
 
 \item{concentration}{Fit only treated arms at this concentration.}
+
+\item{checks}{The counts \code{\link[=missing_day10_replicate]{missing_day10_replicate()}} expects, kept with the
+data since they are data.}
 }
 \value{
 A data frame with one row per experiment.

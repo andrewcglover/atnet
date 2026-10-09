@@ -4,10 +4,14 @@
 \alias{missing_day10_replicate}
 \title{The day-10 replicate held only in the pooled workbook}
 \usage{
-missing_day10_replicate(pooled)
+missing_day10_replicate(pooled, checks)
 }
 \arguments{
 \item{pooled}{Path to the pooled workbook.}
+
+\item{checks}{Path to a CSV with one row per number of blood meals, giving
+\code{n_bloodmeals}, \code{n_control}, \code{n_positive_control}, \code{n_treated} and
+\code{n_positive_treated} as this replicate should have them.}
 }
 \value{
 A one-worksheet data frame in the form of \code{\link[=build_sporozoite_table]{build_sporozoite_table()}}.
@@ -18,6 +22,7 @@ per-replicate one, whose corresponding worksheet holds a copy of an earlier
 replicate instead. It is the last group down each column of
 \verb{#7 72h post spz10}. The counts are checked against the values that make the
 two workbooks reconcile, so a changed workbook raises an error rather than
-passing silently.
+passing silently. Those values are data, so they are read from a file kept
+with the workbooks rather than written here.
 }
 \keyword{internal}

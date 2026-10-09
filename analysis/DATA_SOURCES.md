@@ -86,10 +86,15 @@ Both carry a long-named `experiment (...)` column repeating the fields that
 define an experiment, so a row can be read on its own.
 
 **Sign of `hours_after_infection`.** Positive means the mosquitoes were already
-infected when they met the net; negative means they met it first. This follows
-the supplementary information and the fitting code. The oocyst file the
-blocking model was previously fitted from used the opposite sign, so take care
-when comparing the two.
+infected when they met the net; negative means they met it first. This is the
+same quantity as the `post_time` column of the files these fits were previously
+given, and follows the supplementary information.
+
+The earlier oocyst file carried the same number twice, as `post_time` and as
+its negative `pre_time`, and the blocking model was fitted from the latter. So
+code reading that model's input expects the opposite sign to the column here,
+and must take `pre_time` as `-hours_after_infection`, or set its `side` and `s`
+from this column directly.
 
 ## Reconciliation
 

@@ -66,6 +66,7 @@ data {
   real<lower=0> r0_frac_beta;
   real log_zeta_mean;
   real<lower=0> log_zeta_sd;
+  real<lower=0> sigma_exp_sd;
 }
 
 transformed data {
@@ -92,11 +93,11 @@ transformed parameters {
 }
 
 model {
-  // Priors (all hyperparameters from priors_atn_main.R via the data block).
+  // Priors (all hyperparameters from atn_priors() via the data block).
   log_eip_excess ~ normal(log_eip_excess_mean, log_eip_excess_sd);
   r0_frac        ~ beta(r0_frac_alpha, r0_frac_beta);
   log_zeta       ~ normal(log_zeta_mean, log_zeta_sd);
-  sigma_exp      ~ normal(0, 1);                          // half-normal via <lower=0>
+  sigma_exp      ~ normal(0, sigma_exp_sd);               // half-normal via <lower=0>
   z_exp          ~ std_normal();
 
   // Likelihood

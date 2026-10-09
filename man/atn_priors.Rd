@@ -49,11 +49,10 @@ sampler away from regions where the Hill fit is numerically unstable:
 away from 1, where the suppression vanishes and the kernel cannot be
 seen by the likelihood;
 \item \code{log_s_half_eip} ~ N(log 1.5, 0.4) (95\% within 0.69 to 3.3 days);
-\item \code{log_nH_eip} ~ N(log 5, 0.4) (95\% within 2.3 to 11.0), and at least
-exp(0.5) by a bound in the model itself.
+\item \code{log_nH_eip} ~ N(log 5, 0.4) truncated below at \code{lower} = 0.5, so the
+Hill exponent is at least exp(0.5), about 1.65 (95\% within 2.3 to 11.0).
 }
 
 \code{sigma_exp} ~ N+(0, 1) is the standard deviation of the per-experiment
-effect in every model. The blocking models receive it from here; the EIP
-models fix the same value internally.
+effect in every model.
 }

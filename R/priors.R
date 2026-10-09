@@ -2,12 +2,13 @@
 #
 # The single source of truth. The models declare the hyperparameters they use
 # in their data blocks and receive them from prior_stan_data(), so a prior is
-# changed here and nowhere else. Two exceptions are fixed inside the EIP models
-# (see inst/stan/README.md).
+# changed here and nowhere else.
 #
 # Moved from priors_atn_main.R (malariasimple_ATNs/dev), with the same values.
 # All four current posteriors were fitted with these values; the record each
-# fit saved is kept as tests/testthat/fixtures/priors_used_20260520.json.
+# fit saved is kept as tests/testthat/fixtures/priors_used_20260520.json. That
+# record lacks log_nH_eip$lower, which was then fixed inside eip_fit_hill.stan
+# at the same value, as was sigma_exp's in both EIP models.
 
 #' Prior hyperparameters for the Stan models
 #'
@@ -42,12 +43,11 @@
 #'   away from 1, where the suppression vanishes and the kernel cannot be
 #'   seen by the likelihood;
 #' * `log_s_half_eip` ~ N(log 1.5, 0.4) (95% within 0.69 to 3.3 days);
-#' * `log_nH_eip` ~ N(log 5, 0.4) (95% within 2.3 to 11.0), and at least
-#'   exp(0.5) by a bound in the model itself.
+#' * `log_nH_eip` ~ N(log 5, 0.4) truncated below at `lower` = 0.5, so the
+#'   Hill exponent is at least exp(0.5), about 1.65 (95% within 2.3 to 11.0).
 #'
 #' `sigma_exp` ~ N+(0, 1) is the standard deviation of the per-experiment
-#' effect in every model. The blocking models receive it from here; the EIP
-#' models fix the same value internally.
+#' effect in every model.
 #'
 #' @return A named list of hyperparameters.
 #'
@@ -66,7 +66,7 @@ atn_priors <- function() {
     r0_frac         = list(alpha = 0.5, beta = 0.5),
     log_zeta        = list(mean  = log(log(2.0) / 1.5), sd = 0.75),
     log_s_half_eip  = list(mean  = log(1.5), sd = 0.4),
-    log_nH_eip      = list(mean  = log(5.0), sd = 0.4),
+    log_nH_eip      = list(mean  = log(5.0), sd = 0.4, lower = 0.5),
     r0_frac_eip     = list(alpha = 2.0, beta = 5.0)
   )
 }
@@ -106,6 +106,7 @@ prior_stan_data <- function(priors = atn_priors()) {
     log_s_half_eip_sd     = priors$log_s_half_eip$sd,
     log_nH_eip_mean       = priors$log_nH_eip$mean,
     log_nH_eip_sd         = priors$log_nH_eip$sd,
+    log_nH_eip_lower      = priors$log_nH_eip$lower,
     r0_frac_eip_alpha     = priors$r0_frac_eip$alpha,
     r0_frac_eip_beta      = priors$r0_frac_eip$beta
   )

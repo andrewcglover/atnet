@@ -34,7 +34,11 @@ were fitted in, so the first commit of each file here is that version:
 
 The header comment in each file predates the move.
 
-Prior values are passed in as data, with two exceptions fixed inside the EIP
-models: both give the random-effect standard deviation a half-normal(0, 1)
-prior, and `eip_fit_hill.stan` restricts the Hill exponent to at least
-exp(0.5), about 1.65.
+## Priors
+
+Every prior value comes from `atn_priors()` in `R/priors.R`, passed in as data,
+and a test fails if a model fixes one itself. Two were fixed inside the EIP
+models when they were copied over, and have since been moved out at the same
+values: the half-normal(0, 1) prior on the random-effect standard deviation in
+both, and the truncation of the Hill exponent at exp(0.5), about 1.65, in
+`eip_fit_hill.stan`.

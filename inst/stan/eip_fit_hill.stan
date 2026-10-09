@@ -63,7 +63,8 @@
 //   step for N = 25 rows).
 //
 // Identifiability + numerical-stability constraint:
-//   log_nH is constrained to >= 0.5, i.e. nH >= exp(0.5) ~ 1.65. The
+//   log_nH is constrained to >= log_nH_eip_lower, passed in as data and
+//   0.5 in atn_priors(), i.e. nH >= exp(0.5) ~ 1.65. The
 //   biological motivation is that nH = 1 is the sigmoidality boundary
 //   (Hill recovery becomes hyperbolic), and the numerical motivation
 //   is that Stan's `inc_beta(1/n, 1 - 1/n, z)` continued-fraction
@@ -136,7 +137,7 @@ data {
   array[N] int<lower=0> pos_trt;
   int<lower=1> Delta_r;                        // Erlang shape (= 10)
 
-  // EIP prior hyperparameters (sourced from priors_atn_main.R).  The
+  // EIP prior hyperparameters (from atn_priors() via prior_stan_data()).  The
   // baseline-EIP-floor reparameterisation matches eip_fit.stan; the
   // Hill kernel parameters use the *_eip suffixed regularising priors
   // dedicated to this model (NOT the shared log_s_half / log_nH used
@@ -151,6 +152,8 @@ data {
   real<lower=0> log_s_half_eip_sd;
   real log_nH_eip_mean;
   real<lower=0> log_nH_eip_sd;
+  real log_nH_eip_lower;                       // log_nH prior truncated below here
+  real<lower=0> sigma_exp_sd;
 
   // Gauss-Legendre nodes and weights on [0, 1] for the hill_J integral.
   // Pre-computed in fit_eip_hill.R via Golub-Welsch and passed in.
@@ -169,7 +172,7 @@ parameters {
   real<lower=0, upper=1> r0_frac;      // rho_0 / rho in (0, 1); ATN-induced
                                        // fractional slowdown at exposure
   real log_s_half;                     // log of Hill half-recovery time (days)
-  real<lower=0.5> log_nH;              // log of Hill exponent; nH = exp(log_nH) >= ~1.65
+  real<lower=log_nH_eip_lower> log_nH; // log of Hill exponent; nH = exp(log_nH) >= ~1.65
                                        // (lifted from 0 to 0.5 for numerical stability;
                                        //  see header for rationale)
   real<lower=0> sigma_exp;             // SD of OLRE on logit scale
@@ -181,21 +184,21 @@ transformed parameters {
   real<lower=0> eip_baseline = eip_floor + eip_excess;
   real<lower=0> rho          = shape_r / eip_baseline;
   real<lower=0> s_half       = exp(log_s_half);
-  real<lower=1.6> nH         = exp(log_nH);   // = exp(>=0.5) >= ~1.65
+  real<lower=exp(log_nH_eip_lower)> nH = exp(log_nH);
   real<lower=0> rho0         = r0_frac * rho;
   real<lower=0> B            = rho - rho0;
   vector[K] beta_exp         = sigma_exp * z_exp;
 }
 
 model {
-  // Priors (all hyperparameters from priors_atn_main.R via the data block).
+  // Priors (all hyperparameters from atn_priors() via the data block).
   // Note the *_eip suffixes on the kernel-parameter priors -- these are
   // the regularised Hill-EIP-only priors, NOT the shared blocking priors.
   log_eip_excess ~ normal(log_eip_excess_mean, log_eip_excess_sd);
   r0_frac        ~ beta(r0_frac_eip_alpha, r0_frac_eip_beta);
   log_s_half     ~ normal(log_s_half_eip_mean, log_s_half_eip_sd);
   log_nH         ~ normal(log_nH_eip_mean, log_nH_eip_sd);
-  sigma_exp      ~ normal(0, 1);
+  sigma_exp      ~ normal(0, sigma_exp_sd);
   z_exp          ~ std_normal();
 
   // Likelihood

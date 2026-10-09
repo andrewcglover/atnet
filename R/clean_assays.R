@@ -27,17 +27,25 @@ dissection_day <- function(sheet_name) {
 
 #' Whether exposure came before or after the infectious blood meal
 #'
+#' Timing is counted forward from the infectious blood meal throughout, so
+#' exposure after it is positive and exposure before it is negative. This
+#' follows the supplementary information and the fitting code, where a positive
+#' delay means the mosquitoes were already infected when they met the net.
+#'
+#' Beware that the oocyst file the blocking model was previously fitted from
+#' used the opposite sign, counting backwards from the blood meal.
+#'
 #' @param sheet_name A worksheet name.
 #'
-#' @return `-1` where the worksheet says exposure followed the blood meal, `1`
+#' @return `1` where the worksheet says exposure followed the blood meal, `-1`
 #'   where it preceded it, and `NA` where it says neither.
 #'
 #' @keywords internal
 exposure_sign <- function(sheet_name) {
   if (grepl("post", sheet_name, ignore.case = TRUE)) {
-    -1
-  } else if (grepl("pre", sheet_name, ignore.case = TRUE)) {
     1
+  } else if (grepl("pre", sheet_name, ignore.case = TRUE)) {
+    -1
   } else {
     NA_real_
   }

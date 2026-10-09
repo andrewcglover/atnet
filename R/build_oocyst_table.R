@@ -78,11 +78,13 @@ build_oocyst_table <- function(dir = "data_private/fitting",
     # where it does not.
     sign <- exposure_sign(s)
     d$exposure_h[is.na(d$exposure_h)] <- 0
-    d$exposure_h <- d$exposure_h * ifelse(is.na(sign), 1, sign)
+    d$hours_after_infection <- d$exposure_h * ifelse(is.na(sign), 1, sign)
+    d$exposure_h <- NULL
     # The first two sub-groups of the 72h one-blood-meal columns of this
     # worksheet are one experiment (Saxena, 27 Apr 2026 16:29).
     if (s == "#5 6h 72h post int") {
-      merge_me <- d$exposure_h == -72 & d$n_bloodmeals == 1L & d$subgroup <= 2L
+      merge_me <- d$hours_after_infection == 72 & d$n_bloodmeals == 1L &
+        d$subgroup <= 2L
       d$subgroup[merge_me] <- 1L
     }
     d$workbook <- basename(pooled)
@@ -99,10 +101,9 @@ build_oocyst_table <- function(dir = "data_private/fitting",
   out <- out[is.na(out$duration_min) | out$duration_min == duration, ,
              drop = FALSE]
 
-  out$experiment <- paste(out$workbook, out$worksheet, out$exposure_h,
-                          out$n_bloodmeals, out$subgroup, sep = " | ")
-  rownames(out) <- NULL
-  out[order(out$worksheet, out$exposure_h, out$subgroup, out$arm), ]
+  out <- out[order(out$worksheet, out$hours_after_infection, out$subgroup,
+                   out$arm), ]
+  label_experiments(out, one_row_each = FALSE)
 }
 
 #' The concurrent-exposure experiments held in a separate workbook
@@ -141,7 +142,7 @@ zero_hour_experiments <- function(path) {
       data.frame(
         worksheet = "Data By Experiment", column = paste(dates[[j]], groups[[k]]),
         arm = arm, concentration = if (arm == "treated") 200 else NA_real_,
-        exposure_h = 0, duration_min = NA_real_, n_bloodmeals = 1L,
+        hours_after_infection = 0, duration_min = NA_real_, n_bloodmeals = 1L,
         subgroup = match(j, starts), oocysts = v, stringsAsFactors = FALSE
       )
     })

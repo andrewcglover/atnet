@@ -4,9 +4,9 @@ test_that("the dissection day is read from the worksheet name", {
   expect_true(is.na(dissection_day("#5 6h 72h post int")))
 })
 
-test_that("the worksheet name says whether exposure preceded infection", {
-  expect_equal(exposure_sign("#5 6h 72h post int"), -1)
-  expect_equal(exposure_sign("#3 12h pre int"), 1)
+test_that("timing is counted forward from the infectious blood meal", {
+  expect_equal(exposure_sign("#5 6h 72h post int"), 1)
+  expect_equal(exposure_sign("#3 12h pre int"), -1)
   expect_true(is.na(exposure_sign("#1 0h int")))
 })
 

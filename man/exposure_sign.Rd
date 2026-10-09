@@ -10,10 +10,17 @@ exposure_sign(sheet_name)
 \item{sheet_name}{A worksheet name.}
 }
 \value{
-\code{-1} where the worksheet says exposure followed the blood meal, \code{1}
+\code{1} where the worksheet says exposure followed the blood meal, \code{-1}
 where it preceded it, and \code{NA} where it says neither.
 }
 \description{
-Whether exposure came before or after the infectious blood meal
+Timing is counted forward from the infectious blood meal throughout, so
+exposure after it is positive and exposure before it is negative. This
+follows the supplementary information and the fitting code, where a positive
+delay means the mosquitoes were already infected when they met the net.
+}
+\details{
+Beware that the oocyst file the blocking model was previously fitted from
+used the opposite sign, counting backwards from the blood meal.
 }
 \keyword{internal}

@@ -95,10 +95,43 @@ build_sporozoite_table <- function(dir = "data_private/fitting",
   out <- do.call(rbind, rows)
   out <- rbind(out, missing_day10_replicate(pooled))
 
-  out$exposure_h <- out$exposure_h * ifelse(grepl("post", out$worksheet,
-                                                  ignore.case = TRUE), -1, 1)
+  # Counted forward from the infectious blood meal, as the supplementary
+  # information and the fitting code do.
+  out$hours_after_infection <- out$exposure_h *
+    vapply(out$worksheet, exposure_sign, numeric(1))
+  out$exposure_h <- NULL
   out$replicate <- NULL
-  out[order(out$dissection_day, out$exposure_h, out$n_bloodmeals, out$worksheet), ]
+
+  out <- out[order(out$dissection_day, out$hours_after_infection,
+                   out$n_bloodmeals, out$worksheet), ]
+  label_experiments(out, one_row_each = TRUE)
+}
+
+#' Give each experiment a number and a label
+#'
+#' The fits index experiments by a number from one upwards. The label repeats
+#' the fields that define an experiment, so a row can be read without going
+#' back to the other columns, and is named for the fields it holds.
+#'
+#' @param x A table from [build_sporozoite_table()] or [build_oocyst_table()].
+#' @param one_row_each Whether each row is already one experiment.
+#'
+#' @return `x` with `experiment_id` and a labelled column added.
+#'
+#' @keywords internal
+label_experiments <- function(x, one_row_each) {
+  label <- paste(x$workbook, x$worksheet, x$hours_after_infection,
+                 x$n_bloodmeals, if (one_row_each) 1L else x$subgroup,
+                 sep = " | ")
+  x$experiment_id <- if (one_row_each) {
+    seq_len(nrow(x))
+  } else {
+    match(label, unique(label))
+  }
+  x[[paste0("experiment (workbook | worksheet | hours_after_infection | ",
+            "n_bloodmeals | subgroup)")]] <- label
+  rownames(x) <- NULL
+  x
 }
 
 #' The day-10 replicate held only in the pooled workbook

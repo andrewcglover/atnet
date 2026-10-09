@@ -59,6 +59,38 @@ The last two exclude the `100mg` column of `#1 0h int` and the three and one
 minute arms of `#2 6,3,1 min exposure pre`. Both are real data; neither is
 something the model can represent.
 
+## The two tables
+
+`analysis/02_build_fitting_data.R` writes both into `outputs/`, dated.
+
+`<date>_sporozoite_experiments.csv` has one row per experiment, for the fit to
+the extrinsic incubation period:
+
+| Column | Meaning |
+|---|---|
+| `experiment_id` | 1 upwards, the index the fit gives its per-experiment effect |
+| `worksheet`, `control_column`, `treated_column`, `workbook` | where the row came from |
+| `hours_after_infection` | when the mosquitoes met the net, counted forward from the infectious blood meal |
+| `dissection_day` | day the salivary glands were examined, from the worksheet name |
+| `n_bloodmeals` | one, or two where a second blood meal followed exposure |
+| `duration_min` | how long they rested on the net, where the worksheet varied it |
+| `n_control`, `n_positive_control`, `n_treated`, `n_positive_treated` | dissected and infected in each arm |
+
+`<date>_oocyst_mosquitoes.csv` has one row per mosquito, for the
+transmission-blocking fit, which works on burdens rather than on counts of
+infected mosquitoes. It shares the columns above where they apply, and adds
+`arm`, `concentration`, `oocysts` (that mosquito's burden) and `subgroup` (its
+replicate's position down the column).
+
+Both carry a long-named `experiment (...)` column repeating the fields that
+define an experiment, so a row can be read on its own.
+
+**Sign of `hours_after_infection`.** Positive means the mosquitoes were already
+infected when they met the net; negative means they met it first. This follows
+the supplementary information and the fitting code. The oocyst file the
+blocking model was previously fitted from used the opposite sign, so take care
+when comparing the two.
+
 ## Reconciliation
 
 The pooled and per-replicate workbooks must agree on how many mosquitoes exist

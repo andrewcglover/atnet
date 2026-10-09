@@ -21,7 +21,7 @@ pooled <- file.path("data_private/fitting",
 for (d in c(10, 13)) {
   sheet <- if (d == 10) "#7 72h post spz10" else "#8 72h post spz13"
   from_pooled <- sum(tabulate_assay_workbook(pooled, sheet)$n)
-  ours <- with(spz[spz$dissection_day == d & spz$exposure_h == -72 &
+  ours <- with(spz[spz$dissection_day == d & spz$hours_after_infection == 72 &
                      spz$worksheet != "24h, 72h post 9.2.25 spz13", ],
                sum(n_control + n_treated))
   if (from_pooled != ours) {
@@ -42,7 +42,7 @@ write.csv(ooc, ooc_path, row.names = FALSE)
 message(sprintf("\nsporozoite: %d experiments, %d mosquitoes -> %s",
                 nrow(spz), sum(spz$n_control + spz$n_treated), spz_path))
 message(sprintf("oocyst    : %d experiments, %d mosquitoes -> %s",
-                length(unique(ooc$experiment)), nrow(ooc), ooc_path))
+                length(unique(ooc$experiment_id)), nrow(ooc), ooc_path))
 message("\ncorrections applied:")
 for (i in seq_len(nrow(assay_corrections()))) {
   cr <- assay_corrections()[i, ]

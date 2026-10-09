@@ -1,0 +1,32 @@
+# RStudio and R session files
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# Laboratory data from the Catteruccia group: unpublished, never commit.
+# Raw workbooks and everything derived from them (cleaned summaries) live here.
+data_private/
+
+# Fit outputs, tables and figures: results stay off GitHub until chosen.
+outputs/
+
+# Data and result file types are ignored everywhere by default. To publish a
+# specific file, un-ignore it by path below, e.g.  !inst/extdata/lookup.csv
+*.rds
+*.RDS
+*.rda
+*.RData
+*.csv
+*.xlsx
+*.xls
+*.docx
+*.msg
+*.pdf
+*.png
+
+# Compiled Stan models and other build artefacts
+*.exe
+*.o
+*.so
+*.dll

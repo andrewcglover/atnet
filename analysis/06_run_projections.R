@@ -1,9 +1,11 @@
 # =====================================================================
 # 06_run_projections.R
-#   Country-level admin-1 (no urban/rural split): 6-year forward projections
-#   under SEVEN future net arms using Churcher 2024 MEDIAN net-efficacy
-#   parameters (churcher2024_{only,pbo,cfp}.csv — one row per resistance
-#   level, no draws):
+#   Country-level admin-1 (no urban/rural split): 7-year forward projections
+#   (2025-2031 for Mali) under SEVEN future net arms using Churcher 2024
+#   MEDIAN net-efficacy parameters (churcher2024_{only,pbo,cfp}.csv — one row
+#   per resistance level, no draws). Mass campaigns every three years (2025,
+#   2028, 2031), each on 2 June, about two months before peak rainfall (8-13
+#   August in every Mali region), with monthly continuous distribution between:
 #
 #     none        — no future nets
 #     pyr         — pyrethroid-only (Pyr)
@@ -12,6 +14,9 @@
 #     atn         — antimalarial net, no insecticide (ATN)
 #     pyr_atn     — pyrethroid + antimalarial (Pyr-ATN)
 #     pyr_cfp_atn — Pyr-CFP + antimalarial (Pyr-CFP-ATN)
+#
+#   An eighth arm, pyr_cfp_mc_atn_cd (Pyr-CFP campaigns, ATN continuous
+#   distribution), is not in the paper but can still be run via SWEEP_ARMS.
 #
 #   Antimalarial decay is fixed at log(2)/(2.64*365) — NOT derived from
 #   any read-in net parameter (see ANTIMAL_HL_DAYS below).
@@ -109,11 +114,16 @@ N_CORES <- if (nchar(sweep_cores_env) > 0L) {
 }
 
 human_pop      <- 100000L
-n_future_years <- 6L
-arms           <- c("none", "pyr", "pyr_pbo", "pyr_cfp", "atn", "pyr_atn", "pyr_cfp_atn",
-                    "pyr_cfp_mc_atn_cd")
-# SWEEP_ARMS: comma-separated subset to run (default = all 8). Used for sensitivity sweeps
-# that only need the affected arms (e.g. the ATN arms for ATN_OMEGA).
+n_future_years <- 7L      # 2025-2031: campaigns in 2025, 2028 and 2031
+# Mass campaigns fall this many days into the year: 152 = 2 June, about two months
+# before peak rainfall. It must sit on the monthly continuous-distribution grid
+# (offsets 0, 30, 61, 91, 122, 152, 183, ...), or the campaign would be lost;
+# build_future_schedule() stops if that happens.
+campaign_offset <- 152L
+# The seven arms in the paper. pyr_cfp_mc_atn_cd can still be run via SWEEP_ARMS.
+arms           <- c("none", "pyr", "pyr_pbo", "pyr_cfp", "atn", "pyr_atn", "pyr_cfp_atn")
+# SWEEP_ARMS: comma-separated subset to run (default = the seven above). Used for sensitivity
+# sweeps that only need the affected arms (e.g. the ATN arms for ATN_OMEGA).
 sweep_arms_env <- Sys.getenv("SWEEP_ARMS", "")
 if (nzchar(sweep_arms_env)) {
   arms <- trimws(strsplit(sweep_arms_env, ",")[[1]])
@@ -226,9 +236,8 @@ n_years    <- (hist_last - start_year + 1L) + n_future_years
 n_steps    <- n_years * 365L
 future_start_day <- (future_yr0 - start_year) * 365L
 
-future_campaign_days <- seq(future_start_day,
-                            future_start_day + (n_future_years - 1L) * 365L,
-                            by = 3L * 365L)
+future_campaign_days <- future_start_day + campaign_offset +
+  365L * seq(0L, n_future_years - 1L, by = 3L)
 
 # ---------------------------------------------------------------------
 # 6. Net schedule builders
@@ -251,6 +260,11 @@ build_future_schedule <- function(arm, region) {
 
   grid    <- unique(round(seq(future_start_day, n_steps, by = cd_interval)))
   is_camp <- vapply(grid, function(t) any(abs(t - future_campaign_days) < 1L), logical(1))
+  if (sum(is_camp) != length(future_campaign_days)) {
+    stop(sprintf("%d of %d mass campaigns fall on the distribution grid; the rest would be lost. ",
+                 sum(is_camp), length(future_campaign_days)),
+         "Choose a campaign_offset on the grid.", call. = FALSE)
+  }
   cov     <- ifelse(is_camp, campaign_cov, cd_cov)
   n       <- length(grid)
 
@@ -510,6 +524,8 @@ saveRDS(list(
     future_yr0     = future_yr0,
     future_start_day = future_start_day,
     n_future_years = n_future_years,
+    campaign_offset = campaign_offset,
+    future_campaign_days = future_campaign_days,
     human_pop      = human_pop,
     retention_time = retention_time,
     cd_floor       = cd_floor,

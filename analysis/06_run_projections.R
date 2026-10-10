@@ -4,8 +4,9 @@
 #   (2025-2031 for Mali) under SEVEN future net arms using Churcher 2024
 #   MEDIAN net-efficacy parameters (churcher2024_{only,pbo,cfp}.csv — one row
 #   per resistance level, no draws). Mass campaigns every three years (2025,
-#   2028, 2031), each on 2 June, about two months before peak rainfall (8-13
-#   August in every Mali region), with monthly continuous distribution between:
+#   2028, 2031), each at the start of the calendar month two months before the
+#   month of peak rainfall (1 June for Mali, whose regions peak 8-13 August),
+#   with monthly continuous distribution between:
 #
 #     none        — no future nets
 #     pyr         — pyrethroid-only (Pyr)
@@ -115,11 +116,9 @@ N_CORES <- if (nchar(sweep_cores_env) > 0L) {
 
 human_pop      <- 100000L
 n_future_years <- 7L      # 2025-2031: campaigns in 2025, 2028 and 2031
-# Mass campaigns fall this many days into the year: 152 = 2 June, about two months
-# before peak rainfall. It must sit on the monthly continuous-distribution grid
-# (offsets 0, 30, 61, 91, 122, 152, 183, ...), or the campaign would be lost;
-# build_future_schedule() stops if that happens.
-campaign_offset <- 152L
+# Mass campaigns are this many calendar months before the month of peak rainfall,
+# at the start of the month (so 60-90 days before the peak); see section 5.
+campaign_months_before_peak <- 2L
 # The seven arms in the paper. pyr_cfp_mc_atn_cd can still be run via SWEEP_ARMS.
 arms           <- c("none", "pyr", "pyr_pbo", "pyr_cfp", "atn", "pyr_atn", "pyr_cfp_atn")
 # SWEEP_ARMS: comma-separated subset to run (default = the seven above). Used for sensitivity
@@ -236,8 +235,37 @@ n_years    <- (hist_last - start_year + 1L) + n_future_years
 n_steps    <- n_years * 365L
 future_start_day <- (future_yr0 - start_year) * 365L
 
-future_campaign_days <- future_start_day + campaign_offset +
-  365L * seq(0L, n_future_years - 1L, by = 3L)
+# Mass campaign dates. Peak rainfall is found for each region from the site's
+# seasonality with malariasimulation's own peak_season_offset() (day of a
+# 365-day year), and the national peak is the median across regions. The
+# campaign month is campaign_months_before_peak calendar months before the peak
+# month, wrapping into November or December for a January or February peak, so
+# the campaigns stay in the first, fourth and seventh future years and each
+# precedes the following peak. Each campaign takes that month's slot on the
+# monthly continuous-distribution grid (evenly spaced, so within two days of the
+# 1st), replacing that month's top-up; the spacing the top-up coverage was
+# calculated for is therefore unchanged. The expression below is the grid's
+# own (see build_future_schedule()), so the dates match it exactly.
+seas <- site_obj$seasonality$seasonality_parameters
+rainfall_floor <- malariasimulation::get_parameters()$rainfall_floor
+peak_days <- setNames(vapply(seq_len(nrow(seas)), function(i) {
+  malariasimulation::peak_season_offset(list(
+    model_seasonality = TRUE,
+    g0 = seas$g0[i],
+    g  = c(seas$g1[i], seas$g2[i], seas$g3[i]),
+    h  = c(seas$h1[i], seas$h2[i], seas$h3[i]),
+    rainfall_floor = rainfall_floor
+  ))
+}, numeric(1)), seas$name_1)
+peak_day       <- median(peak_days)
+month_starts   <- cumsum(c(1L, 31L, 28L, 31L, 30L, 31L, 30L, 31L, 31L, 30L, 31L, 30L))
+peak_month     <- findInterval(peak_day, month_starts)
+campaign_month <- (peak_month - 1L - campaign_months_before_peak) %% 12L + 1L
+future_campaign_days <- round(future_start_day +
+  (campaign_month - 1L + 12L * seq(0L, n_future_years - 1L, by = 3L)) * cd_interval)
+message(sprintf("Peak rainfall: day %g-%g by region, national median day %g (%s); campaigns in %s",
+                min(peak_days), max(peak_days), peak_day, month.name[peak_month],
+                month.name[campaign_month]))
 
 # ---------------------------------------------------------------------
 # 6. Net schedule builders
@@ -261,9 +289,10 @@ build_future_schedule <- function(arm, region) {
   grid    <- unique(round(seq(future_start_day, n_steps, by = cd_interval)))
   is_camp <- vapply(grid, function(t) any(abs(t - future_campaign_days) < 1L), logical(1))
   if (sum(is_camp) != length(future_campaign_days)) {
-    stop(sprintf("%d of %d mass campaigns fall on the distribution grid; the rest would be lost. ",
-                 sum(is_camp), length(future_campaign_days)),
-         "Choose a campaign_offset on the grid.", call. = FALSE)
+    # Cannot happen while the campaign dates are built from the grid (section 5);
+    # without this check a campaign off the grid would silently not take place.
+    stop(sprintf("%d of %d mass campaigns fall on the distribution grid; the rest would be lost.",
+                 sum(is_camp), length(future_campaign_days)), call. = FALSE)
   }
   cov     <- ifelse(is_camp, campaign_cov, cd_cov)
   n       <- length(grid)
@@ -524,7 +553,10 @@ saveRDS(list(
     future_yr0     = future_yr0,
     future_start_day = future_start_day,
     n_future_years = n_future_years,
-    campaign_offset = campaign_offset,
+    peak_days      = peak_days,
+    peak_day       = peak_day,
+    campaign_months_before_peak = campaign_months_before_peak,
+    campaign_month = campaign_month,
     future_campaign_days = future_campaign_days,
     human_pop      = human_pop,
     retention_time = retention_time,

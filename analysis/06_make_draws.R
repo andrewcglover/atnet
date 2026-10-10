@@ -15,6 +15,16 @@
 #       one value from each prior in projection_priors(); p_atn_atn and
 #       p_atn_aitn are the same quantile p_atn_u of the ATN and AITN priors
 #
+# Insecticide-treated net column:
+#   itn_draw
+#       the draw of the Churcher et al. (2024) ITN parameters (dn0, rn0,
+#       gamman) to use for every net type; see ?itn_draws_source. Their 1000
+#       draws are each a whole curve across pyrethroid resistance and are
+#       linked across net types by draw number, so row i uses draw i of every
+#       net type, and none is resampled. Their order is unrelated to their
+#       values, so the first N rows use a random subset. The draws are
+#       downloaded to data_private/itn_params/ if not already there.
+#
 # Written to inst/extdata/projection_draws.csv, which is tracked. The fit is
 # named below rather than taken as the newest, and the seed is fixed, so
 # rerunning this script reproduces the table exactly:
@@ -37,6 +47,13 @@ tra_draws <- rstan::extract(readRDS(file.path(fit_dir, "tra.rds")),
 
 set.seed(seed)
 draws <- draw_antimalarial_inputs(eip_draws, tra_draws, n = n_draws)
+
+itn <- read_itn_draws(file.path("data_private", "itn_params"))
+n_itn <- vapply(itn, function(x) length(unique(x$draw)), integer(1))
+if (any(n_itn < n_draws)) {
+  stop("The ITN files hold fewer than ", n_draws, " draws.", call. = FALSE)
+}
+draws$itn_draw <- seq_len(n_draws)
 
 dir.create(dirname(out_file), recursive = TRUE, showWarnings = FALSE)
 utils::write.csv(draws, out_file, row.names = FALSE)
@@ -80,3 +97,11 @@ colnames(prior_tab) <- c("table 2.5%", "table 50%", "table 97.5%",
                          "prior 2.5%", "prior 50%", "prior 97.5%")
 cat("\nPrior inputs, table against prior:\n")
 print(signif(prior_tab, 4))
+
+cat("\nITN parameters, median over all draws:\n")
+for (net in names(itn)) {
+  x <- itn[[net]][itn[[net]]$resistance %in% c(0, 0.5, 0.9), ]
+  med <- stats::aggregate(cbind(dn0, rn0, gamman) ~ resistance, x, stats::median)
+  cat(net, "\n")
+  print(signif(med, 4), row.names = FALSE)
+}

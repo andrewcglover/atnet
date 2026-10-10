@@ -169,3 +169,28 @@ write_priors_json <- function(path, priors = atn_priors()) {
                        digits = 12)
   invisible(path)
 }
+
+#' Prior distributions for the projection inputs not fitted to assay data
+#'
+#' The three inputs of the transmission model that the assays do not inform,
+#' as in the priors table of the SI (uncertainty and sensitivity analysis):
+#' * `omega_atn` ~ Beta(41.8, 4.65), the probability that a repelled mosquito
+#'   contacts the net (median 0.91, 95% within 0.80 to 0.97);
+#' * `p_atn` ~ Beta(19.11, 1.30) for ATNs (median 0.95, 95% within 0.80 to
+#'   0.996) and Beta(14.85, 1.93) for AITNs (median 0.90, 95% within 0.70 to
+#'   0.99), the probability that a mosquito contacting the net is exposed to
+#'   the antimalarial;
+#' * `half_life_years` ~ Gamma(shape 6.38, scale 0.413), the half-life of the
+#'   antimalarial on the net in years (median 2.50, 95% within 1.00 to 5.04).
+#'
+#' @return A named list of distribution parameters.
+#'
+#' @export
+projection_priors <- function() {
+  list(
+    omega_atn       = list(shape1 = 41.8, shape2 = 4.65),
+    p_atn           = list(atn  = list(shape1 = 19.11, shape2 = 1.30),
+                           aitn = list(shape1 = 14.85, shape2 = 1.93)),
+    half_life_years = list(shape = 6.38, scale = 0.413)
+  )
+}

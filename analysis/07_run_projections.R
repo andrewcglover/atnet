@@ -1,5 +1,5 @@
 # =====================================================================
-# 06_run_projections.R
+# 07_run_projections.R
 #   Country-level admin-1 (no urban/rural split): 7-year forward projections
 #   (2025-2031 for Mali) under SEVEN future net arms using Churcher 2024
 #   MEDIAN net-efficacy parameters (churcher2024_{only,pbo,cfp}.csv — one row
@@ -41,7 +41,7 @@
 #   (on the laptop), and otherwise from the installed library (on the
 #   cluster, where the fork is installed at a fixed tag):
 #       ATN_FORK_PATH=C:/Users/ag4218/Local/GitHub/malariasimulation \
-#         Rscript analysis/06_run_projections.R
+#         Rscript analysis/07_run_projections.R
 #   Either way the run stops unless the loaded malariasimulation is the fork.
 # =====================================================================
 
@@ -83,7 +83,7 @@ FIT_DIR <- file.path("outputs", "fits", fit_stamp)
 # ANTIMAL_HL_YEARS: antimalarial half-life in years. Override via env var to run
 # sensitivity sweeps without editing this file (avoids edit-races during concurrent runs).
 #   Default: 2.64 yr (same as before). Sensitivity: 5, 1.
-#   Launch as: ANTIMAL_HL_YEARS=5 SWEEP_CORES=10 Rscript analysis/06_run_projections.R
+#   Launch as: ANTIMAL_HL_YEARS=5 SWEEP_CORES=10 Rscript analysis/07_run_projections.R
 hl_years       <- as.numeric(Sys.getenv("ANTIMAL_HL_YEARS", "2.64"))
 hl_tag         <- gsub("\\.", "p", format(hl_years, trim = TRUE))  # 2.64->"2p64", 5->"5", 1->"1"
 

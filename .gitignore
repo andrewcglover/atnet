@@ -30,3 +30,6 @@ outputs/
 *.o
 *.so
 *.dll
+
+# The draws table for the projections (analysis/06_make_draws.R): public.
+!inst/extdata/projection_draws.csv

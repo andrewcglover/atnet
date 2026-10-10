@@ -1,7 +1,7 @@
 # Extending a site file's intervention history into the projection window.
 #
 # Moved unchanged from the malariasimulation fork's dev/InterventionExpansion.R
-# with the projection pipeline (analysis/06_run_projections.R).
+# with the projection pipeline (analysis/07_run_projections.R).
 
 #' Carry a site's last year of interventions forward
 #'

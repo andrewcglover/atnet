@@ -7,9 +7,10 @@
 #' pyrethroid-only, pyrethroid-PBO and pyrethroid-pyrrole (chlorfenapyr) nets,
 #' from the `parameters/` folder of the repository below (MIT licence), pinned
 #' to one commit. Each file holds 1000 draws at each of 101 levels of
-#' pyrethroid resistance, 0 to 1 in steps of 0.01. The MD5 checksums are of
-#' the files as downloaded, which matched the repository's own (git blob)
-#' hashes.
+#' pyrethroid resistance, 0 to 1 in steps of 0.01. Unmodified copies, with
+#' the repository's licence, are kept in this package's
+#' `extdata/churcher2024_itn_draws/`. The MD5 checksums are of the files as
+#' downloaded, which matched the repository's own (git blob) hashes.
 #'
 #' @return A list: `repo`, `commit`, and named vectors `files` and `md5`, the
 #'   names being the net types `only`, `pbo` and `cfp`.
@@ -32,34 +33,32 @@ itn_draws_source <- function() {
   )
 }
 
-#' Read the ITN parameter draws, downloading them first if needed
+#' Read the ITN parameter draws
 #'
-#' Any of the three files in [itn_draws_source()] missing from `dir` is
-#' downloaded from the pinned commit; all three are then checked against
-#' their checksums before being read.
+#' Reads the three files in [itn_draws_source()], after checking each against
+#' its checksum.
 #'
-#' @param dir The folder holding the files.
+#' @param dir The folder holding the files; by default the copies kept in this
+#'   package.
 #'
 #' @return A named list (`only`, `pbo`, `cfp`) of data frames in the form
 #'   returned by [standardise_itn_draws()].
 #'
 #' @export
-read_itn_draws <- function(dir) {
+read_itn_draws <- function(dir = system.file("extdata", "churcher2024_itn_draws",
+                                             package = "atnet")) {
   src <- itn_draws_source()
-  dir.create(dir, recursive = TRUE, showWarnings = FALSE)
   paths <- stats::setNames(file.path(dir, src$files), names(src$files))
-  for (net in names(paths)) {
-    if (!file.exists(paths[[net]])) {
-      url <- sprintf("https://raw.githubusercontent.com/%s/%s/parameters/%s",
-                     src$repo, src$commit, src$files[[net]])
-      utils::download.file(url, paths[[net]], mode = "wb", quiet = TRUE)
-    }
+  missing <- paths[!file.exists(paths)]
+  if (length(missing)) {
+    stop("ITN draw file not found: ", paste(missing, collapse = ", "),
+         call. = FALSE)
   }
   md5 <- tools::md5sum(paths)
   bad <- names(paths)[unname(md5) != src$md5[names(paths)]]
   if (length(bad)) {
     stop("Checksum mismatch for ", paste(paths[bad], collapse = ", "),
-         "; delete the file to download it again.", call. = FALSE)
+         call. = FALSE)
   }
   lapply(stats::setNames(names(paths), names(paths)),
          function(net) standardise_itn_draws(readRDS(paths[[net]]), net))

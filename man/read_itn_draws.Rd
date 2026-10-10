@@ -2,19 +2,21 @@
 % Please edit documentation in R/itn_draws.R
 \name{read_itn_draws}
 \alias{read_itn_draws}
-\title{Read the ITN parameter draws, downloading them first if needed}
+\title{Read the ITN parameter draws}
 \usage{
-read_itn_draws(dir)
+read_itn_draws(
+  dir = system.file("extdata", "churcher2024_itn_draws", package = "atnet")
+)
 }
 \arguments{
-\item{dir}{The folder holding the files.}
+\item{dir}{The folder holding the files; by default the copies kept in this
+package.}
 }
 \value{
 A named list (\code{only}, \code{pbo}, \code{cfp}) of data frames in the form
 returned by \code{\link[=standardise_itn_draws]{standardise_itn_draws()}}.
 }
 \description{
-Any of the three files in \code{\link[=itn_draws_source]{itn_draws_source()}} missing from \code{dir} is
-downloaded from the pinned commit; all three are then checked against
-their checksums before being read.
+Reads the three files in \code{\link[=itn_draws_source]{itn_draws_source()}}, after checking each against
+its checksum.
 }

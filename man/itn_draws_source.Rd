@@ -15,7 +15,8 @@ The posterior draws of the ITN parameters of Churcher et al. (2024) for
 pyrethroid-only, pyrethroid-PBO and pyrethroid-pyrrole (chlorfenapyr) nets,
 from the \verb{parameters/} folder of the repository below (MIT licence), pinned
 to one commit. Each file holds 1000 draws at each of 101 levels of
-pyrethroid resistance, 0 to 1 in steps of 0.01. The MD5 checksums are of
-the files as downloaded, which matched the repository's own (git blob)
-hashes.
+pyrethroid resistance, 0 to 1 in steps of 0.01. Unmodified copies, with
+the repository's licence, are kept in this package's
+\verb{extdata/churcher2024_itn_draws/}. The MD5 checksums are of the files as
+downloaded, which matched the repository's own (git blob) hashes.
 }

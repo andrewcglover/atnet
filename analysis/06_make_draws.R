@@ -22,8 +22,8 @@
 #       draws are each a whole curve across pyrethroid resistance and are
 #       linked across net types by draw number, so row i uses draw i of every
 #       net type, and none is resampled. Their order is unrelated to their
-#       values, so the first N rows use a random subset. The draws are
-#       downloaded to data_private/itn_params/ if not already there.
+#       values, so the first N rows use a random subset. The draws are kept,
+#       unmodified, in inst/extdata/churcher2024_itn_draws/.
 #
 # Written to inst/extdata/projection_draws.csv, which is tracked. The fit is
 # named below rather than taken as the newest, and the seed is fixed, so
@@ -48,7 +48,7 @@ tra_draws <- rstan::extract(readRDS(file.path(fit_dir, "tra.rds")),
 set.seed(seed)
 draws <- draw_antimalarial_inputs(eip_draws, tra_draws, n = n_draws)
 
-itn <- read_itn_draws(file.path("data_private", "itn_params"))
+itn <- read_itn_draws()
 n_itn <- vapply(itn, function(x) length(unique(x$draw)), integer(1))
 if (any(n_itn < n_draws)) {
   stop("The ITN files hold fewer than ", n_draws, " draws.", call. = FALSE)

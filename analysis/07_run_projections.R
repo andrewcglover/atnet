@@ -1,12 +1,12 @@
 # =====================================================================
 # 07_run_projections.R
 #   Country-level admin-1 (no urban/rural split): 7-year forward projections
-#   (2025-2031 for Mali) under SEVEN future net arms using Churcher 2024
-#   MEDIAN net-efficacy parameters (churcher2024_{only,pbo,cfp}.csv — one row
-#   per resistance level, no draws). Mass campaigns every three years (2025,
-#   2028, 2031), each at the start of the calendar month two months before the
-#   month of peak rainfall (1 June for Mali, whose regions peak 8-13 August),
-#   with monthly continuous distribution between:
+#   (2025-2031 for Mali) under SEVEN future net arms, one simulation per row of
+#   the draws table (inst/extdata/projection_draws.csv, analysis/06_make_draws.R)
+#   for each region and arm. Mass campaigns every three years (2025, 2028,
+#   2031), each at the start of the calendar month two months before the month
+#   of peak rainfall (1 June for Mali, whose regions peak 8-13 August), with
+#   monthly continuous distribution between:
 #
 #     none        — no future nets
 #     pyr         — pyrethroid-only (Pyr)
@@ -19,33 +19,50 @@
 #   An eighth arm, pyr_cfp_mc_atn_cd (Pyr-CFP campaigns, ATN continuous
 #   distribution), is not in the paper but can still be run via SWEEP_ARMS.
 #
-#   Antimalarial decay is fixed at log(2)/(2.64*365) — NOT derived from
-#   any read-in net parameter (see ANTIMAL_HL_DAYS below).
+#   Simulation i of every region and arm uses row i of the draws table:
+#     - the EIP and blocking kernel parameters, omega_atn and the antimalarial
+#       half-life (ATN arms only);
+#     - p_A: p_a_atn for the ATN arm, p_a_aitn for Pyr-ATN and Pyr-CFP-ATN;
+#     - itn_draw: the draw of the Churcher et al. (2024) net parameters
+#       (read_itn_draws()) used for every future insecticidal net, at each
+#       year's projected pyrethroid resistance in the region;
+#     - the random-number seed, SEED_BASE + i, the same for every region and
+#       arm.
+#   Arms without an antimalarial use only itn_draw and the seed. Nets before
+#   the projection window keep the site file's efficacy.
+#
+#   Settings (environment variables):
+#     DRAW_ROWS         rows of the draws table to run, e.g. 1-100 (required)
+#     ANTIMAL_HL_YEARS  fix the antimalarial half-life (years) in every row,
+#                       e.g. 1, 2.5 or 5; unset = each row's drawn value
+#     SWEEP_ARMS        comma-separated subset of arms (e.g. the three ATN
+#                       arms for the fixed half-life runs)
+#     SWEEP_CORES, NET_RETENTION_DAYS, OUT_SUFFIX, ATN_FORK_PATH: see below
+#   Results go to outputs/projections/<iso>_projections_rows<a>-<b>_hl<tag>.rds
+#   (hl tag "drawn", or the fixed half-life), and an existing file is never
+#   overwritten.
 #
 #   Change COUNTRY_ISO to run any available country. Default: MLI (Mali).
 #
 #   Moved from the malariasimulation fork's dev/c24med_projection_run.R
-#   (atn-dev at 967d2bd). The model code is unchanged; what changed is where
-#   things are read from and written to:
+#   (atn-dev at 967d2bd), which used median parameters throughout. Inputs:
 #     site file         data_private/site_files/<ISO>.rds
 #                       (copied from the fork's dev/site_files/without_split/)
-#     net efficacy      data_private/itn_params/churcher2024_{only,pbo,cfp}.csv
-#                       (copied from the fork's dev/itn_params/)
-#     ATN kernel fits   outputs/fits/<stamp>/{eip_hill,tra}.rds, the newest
-#                       full fit unless FIT_STAMP names one
+#     draws table       inst/extdata/projection_draws.csv
+#     ITN draws         inst/extdata/churcher2024_itn_draws/
 #     results           outputs/projections/
-#   and expand_interventions() is now a function of this package.
+#   and expand_interventions() is a function of this package.
 #
 #   Run with the working directory at the root of this package. The
 #   malariasimulation fork is loaded from source when ATN_FORK_PATH is set
 #   (on the laptop), and otherwise from the installed library (on the
 #   cluster, where the fork is installed at a fixed tag):
 #       ATN_FORK_PATH=C:/Users/ag4218/Local/GitHub/malariasimulation \
-#         Rscript analysis/07_run_projections.R
+#         DRAW_ROWS=1-100 Rscript analysis/07_run_projections.R
 #   Either way the run stops unless the loaded malariasimulation is the fork.
 # =====================================================================
 
-devtools::load_all(quiet = TRUE)   # atnet: expand_interventions()
+devtools::load_all(quiet = TRUE)   # atnet: expand_interventions(), read_itn_draws()
 ATNET_PATH <- normalizePath(".")
 FORK_PATH  <- Sys.getenv("ATN_FORK_PATH", "")
 if (nzchar(FORK_PATH)) {
@@ -68,43 +85,69 @@ library(parallel)
 COUNTRY_ISO <- "MLI"   # ISO3 of site file under data_private/site_files/
 SITE_FILE   <- file.path("data_private", "site_files", sprintf("%s.rds", COUNTRY_ISO))
 
-# FIT_STAMP: the ATN kernel fit to use, a folder name under outputs/fits/.
-# Empty = the newest full fit.
-fit_stamp <- Sys.getenv("FIT_STAMP", "")
-if (!nzchar(fit_stamp)) {
-  stamps <- sort(list.files(file.path("outputs", "fits"), pattern = "^[0-9]{8}_[0-9]{4}$"))
-  if (!length(stamps)) {
-    stop("No full fit in outputs/fits/. Run analysis/03_fit_models.R first.", call. = FALSE)
+# Settings that no longer exist. Each is refused if set, so that an old command
+# cannot appear to choose something the run then ignores.
+removed_settings <- c(
+  ATN_OMEGA     = "omega_atn is now drawn per row from the draws table",
+  ATN_CHEM_DOSE = "chem_dose_atn was replaced by omega_atn on 2026-10-09",
+  FIT_STAMP     = "the kernel parameters now come from the draws table, whose fit is pinned in analysis/06_make_draws.R"
+)
+for (v in names(removed_settings)) {
+  if (nzchar(Sys.getenv(v, ""))) {
+    stop(v, " is no longer used: ", removed_settings[[v]], ".", call. = FALSE)
   }
-  fit_stamp <- stamps[length(stamps)]
 }
-FIT_DIR <- file.path("outputs", "fits", fit_stamp)
 
-# ANTIMAL_HL_YEARS: antimalarial half-life in years. Override via env var to run
-# sensitivity sweeps without editing this file (avoids edit-races during concurrent runs).
-#   Default: 2.64 yr (same as before). Sensitivity: 5, 1.
-#   Launch as: ANTIMAL_HL_YEARS=5 SWEEP_CORES=10 Rscript analysis/07_run_projections.R
-hl_years       <- as.numeric(Sys.getenv("ANTIMAL_HL_YEARS", "2.64"))
-hl_tag         <- gsub("\\.", "p", format(hl_years, trim = TRUE))  # 2.64->"2p64", 5->"5", 1->"1"
+# The draws table: row i holds every uncertain input of simulation i.
+DRAWS_FILE <- file.path("inst", "extdata", "projection_draws.csv")
 
-# ATN_OMEGA: omega_atn, the probability that a repelled mosquito contacts the net (SI omega;
-# p_C = s_N + omega * r_N), the same for all net types and ages. Default 0.9; plausible range
-# 0.8 to 1.0. Affects every ATN arm. When not 0.9, OUT_FILE gets an _omega{tag} suffix.
-# Replaces ATN_CHEM_DOSE (chem_dose_atn, removed 2026-10-09). That variable is refused if set,
-# so an old driver script (e.g. run_c24med_overnight.sh) cannot silently run under the new
-# contact model with its old meaning.
-if (nzchar(Sys.getenv("ATN_CHEM_DOSE", ""))) {
-  stop("ATN_CHEM_DOSE was removed on 2026-10-09 (chem_dose_atn replaced by omega_atn); ",
-       "set ATN_OMEGA instead")
+# DRAW_ROWS: the rows of the draws table to run, as first-last (e.g. 1-100) or a
+# single row. Required, so a large run cannot start by accident; a setup-only
+# check (country_test_mode) defaults to row 1.
+draw_rows_env <- Sys.getenv("DRAW_ROWS", "")
+if (!nzchar(draw_rows_env)) {
+  if (!isTRUE(getOption("country_test_mode"))) {
+    stop("Set DRAW_ROWS to the rows of the draws table to run, e.g. DRAW_ROWS=1-100.",
+         call. = FALSE)
+  }
+  draw_rows_env <- "1"
 }
-omega_atn_use  <- as.numeric(Sys.getenv("ATN_OMEGA", "0.9"))
-omega_tag      <- gsub("\\.", "p", format(omega_atn_use, trim = TRUE))  # 0.8->"0p8", 1->"1"
-omega_suffix   <- if (omega_atn_use != 0.9) sprintf("_omega%s", omega_tag) else ""
-# OUT_SUFFIX: extra tag appended to the filename (before .rds) so non-default runs
-# (e.g. retention sweeps, single-arm add-on runs) never overwrite existing results.
+draw_bounds <- suppressWarnings(as.integer(strsplit(draw_rows_env, "-", fixed = TRUE)[[1]]))
+if (length(draw_bounds) == 1L) draw_bounds <- rep(draw_bounds, 2L)
+if (length(draw_bounds) != 2L || anyNA(draw_bounds) || draw_bounds[1] < 1L ||
+    draw_bounds[2] < draw_bounds[1]) {
+  stop("DRAW_ROWS must be first-last (e.g. 1-100) or a single row, not '", draw_rows_env, "'.",
+       call. = FALSE)
+}
+draw_rows <- seq.int(draw_bounds[1], draw_bounds[2])
+
+# The random-number seed of simulation i is SEED_BASE + i, the same for every
+# region and arm, so the arms of one row are compared on the same random numbers.
+SEED_BASE <- 20261011L
+
+# ANTIMAL_HL_YEARS: fix the antimalarial half-life (years) in every row, for the
+# sensitivity runs at 1, 2.5 and 5 years; everything else still comes from the
+# row. Unset = each row's drawn half-life (half_life_atn_years).
+#   Launch as: ANTIMAL_HL_YEARS=5 SWEEP_ARMS=atn,pyr_atn,pyr_cfp_atn DRAW_ROWS=1-100 \
+#                Rscript analysis/07_run_projections.R
+hl_env <- Sys.getenv("ANTIMAL_HL_YEARS", "")
+hl_fixed_years <- if (nzchar(hl_env)) as.numeric(hl_env) else NULL
+if (!is.null(hl_fixed_years) && !(is.finite(hl_fixed_years) && hl_fixed_years > 0)) {
+  stop("ANTIMAL_HL_YEARS must be a positive number of years, not '", hl_env, "'.",
+       call. = FALSE)
+}
+hl_tag <- if (is.null(hl_fixed_years)) "drawn" else
+  gsub("\\.", "p", format(hl_fixed_years, trim = TRUE))  # 2.5 -> "2p5", 5 -> "5"
+
+# OUT_SUFFIX: extra tag appended to the filename (before .rds), e.g. for retention
+# sweeps or add-on arm runs. An existing results file is never overwritten.
 out_extra_suffix <- Sys.getenv("OUT_SUFFIX", "")
-OUT_FILE       <- sprintf("outputs/projections/%s_c24med_projection_results_hl%s%s%s.rds",
-                          tolower(COUNTRY_ISO), hl_tag, omega_suffix, out_extra_suffix)
+OUT_FILE <- sprintf("outputs/projections/%s_projections_rows%d-%d_hl%s%s.rds",
+                    tolower(COUNTRY_ISO), draw_bounds[1], draw_bounds[2], hl_tag,
+                    out_extra_suffix)
+if (file.exists(OUT_FILE) && !isTRUE(getOption("country_test_mode"))) {
+  stop(OUT_FILE, " already exists. Move it, or set OUT_SUFFIX.", call. = FALSE)
+}
 
 # SWEEP_CORES: number of parallel workers. Override via env var for concurrent runs.
 sweep_cores_env <- Sys.getenv("SWEEP_CORES", "")
@@ -122,7 +165,8 @@ campaign_months_before_peak <- 2L
 # The seven arms in the paper. pyr_cfp_mc_atn_cd can still be run via SWEEP_ARMS.
 arms           <- c("none", "pyr", "pyr_pbo", "pyr_cfp", "atn", "pyr_atn", "pyr_cfp_atn")
 # SWEEP_ARMS: comma-separated subset to run (default = the seven above). Used for sensitivity
-# sweeps that only need the affected arms (e.g. the ATN arms for ATN_OMEGA).
+# runs that only need the affected arms (e.g. the three ATN arms for a fixed half-life, since
+# the other arms do not use it and would reproduce the main run exactly).
 sweep_arms_env <- Sys.getenv("SWEEP_ARMS", "")
 if (nzchar(sweep_arms_env)) {
   arms <- trimws(strsplit(sweep_arms_env, ",")[[1]])
@@ -147,9 +191,11 @@ future_interventions <- list(
 site_obj     <- readRDS(SITE_FILE)
 country_name <- unique(site_obj$country)[1]
 message(sprintf("Country: %s (%s)", country_name, COUNTRY_ISO))
-message(sprintf("ANTIMAL HL: %.2f yr (tag: hl%s) | cores: %d", hl_years, hl_tag, N_CORES))
-message(sprintf("omega_atn: %g | arms: %s", omega_atn_use, paste(arms, collapse = ",")))
-message(sprintf("ATN kernel fits: %s", FIT_DIR))
+message(sprintf("Draw rows: %d-%d (%d) | seeds %d-%d | cores: %d", draw_bounds[1], draw_bounds[2],
+                length(draw_rows), SEED_BASE + draw_bounds[1], SEED_BASE + draw_bounds[2], N_CORES))
+message(sprintf("Antimalarial half-life: %s | arms: %s",
+                if (is.null(hl_fixed_years)) "drawn per row" else sprintf("fixed at %g yr", hl_fixed_years),
+                paste(arms, collapse = ",")))
 message(sprintf("OUT_FILE: %s", OUT_FILE))
 
 site_retention <- unique(site_obj$interventions$mean_retention)
@@ -172,46 +218,66 @@ message(sprintf("CD: campaign_cov=%.2f -> floor=%.4f, monthly_top-up_cov=%.4f",
                 campaign_cov, cd_floor, cd_cov))
 
 # ---------------------------------------------------------------------
-# 2. Churcher 2024 median net-efficacy params
-#    gamman in the CSV files is in years; * 365 -> days.
-#    One row per resistance level — med_net() works unchanged.
+# 2. Net-efficacy draws of Churcher et al. (2024): 1000 draws of dn0, rn0
+#    and gamman (years) per net type, each a whole curve across resistance
+#    levels 0, 0.01, ..., 1 (see ?read_itn_draws).
 # ---------------------------------------------------------------------
-itn_dir   <- file.path("data_private", "itn_params")
-only_pars <- read.csv(file.path(itn_dir, "churcher2024_only.csv")) |> mutate(gamman = gamman * 365)
-pbo_pars  <- read.csv(file.path(itn_dir, "churcher2024_pbo.csv"))  |> mutate(gamman = gamman * 365)
-cfp_pars  <- read.csv(file.path(itn_dir, "churcher2024_cfp.csv"))  |> mutate(gamman = gamman * 365)
+itn_draws <- read_itn_draws()
 
-# Pick net params at the nearest resistance-grid level (grid at 0.01 increments).
-# gamman from the CSV is already a mean (not a half-life); used directly for set_bednets.
-med_net <- function(pars, res) {
-  grid    <- sort(unique(pars$resistance))
-  res_use <- grid[which.min(abs(grid - res))]
-  pars |> filter(resistance == res_use) |>
-    summarise(dn0 = median(dn0), rn0 = median(rn0), gamman = median(gamman))
+# The draws for each insecticidal arm's net. Pyr-ATN and Pyr-CFP-ATN carry the
+# same insecticide as Pyr and Pyr-CFP, and the same draw, so each pair differs
+# only by the antimalarial.
+net_of_arm <- c(pyr = "only", pyr_atn = "only", pyr_pbo = "pbo",
+                pyr_cfp = "cfp", pyr_cfp_atn = "cfp")
+
+# dn0, rn0 and gamman (days) of draw k of a net type at each resistance in res,
+# each taken at the nearest resistance level.
+net_draw <- function(net, k, res) {
+  x <- itn_draws[[net]]
+  x <- x[x$draw == k, ]
+  j <- vapply(res, function(r) which.min(abs(x$resistance - r)), integer(1))
+  list(dn0 = x$dn0[j], rn0 = x$rn0[j], gamman = x$gamman[j] * 365)
 }
 
 # ---------------------------------------------------------------------
-# 3. Antimalarial decay — derived from hl_years (env-var overridable, see top).
-#    Default half-life = 2.64 years. Sensitivity: 5 yr, 1 yr.
+# 3. The draws table: one row per simulation
 # ---------------------------------------------------------------------
-ANTIMAL_HL_DAYS <- hl_years * 365    # antimalarial half-life (days)
-gamma_atn       <- log(2) / ANTIMAL_HL_DAYS   # potency decay rate (/day)
+draws_tab <- read.csv(DRAWS_FILE)
+if (max(draw_rows) > nrow(draws_tab) || !identical(draws_tab$draw, seq_len(nrow(draws_tab)))) {
+  stop(sprintf("DRAW_ROWS asks for rows up to %d, but %s has rows 1 to %d.",
+               max(draw_rows), DRAWS_FILE, nrow(draws_tab)), call. = FALSE)
+}
+if (max(draws_tab$itn_draw) > min(vapply(itn_draws, function(x) max(x$draw), numeric(1)))) {
+  stop("The draws table asks for more ITN draws than the ITN files hold.", call. = FALSE)
+}
 
-# ---------------------------------------------------------------------
-# 4. Median ATN kernel parameters (Stan posteriors — unchanged)
-# ---------------------------------------------------------------------
-eip_samples <- rstan::extract(readRDS(file.path(FIT_DIR, "eip_hill.rds")))
-tra_samples <- rstan::extract(readRDS(file.path(FIT_DIR, "tra.rds")))
-atn_kern <- list(
-  s_half_eip  = median(eip_samples$s_half),
-  nH_eip      = median(eip_samples$nH),
-  rho_frac    = median(eip_samples$r0_frac),
-  s_half_pre  = median(tra_samples$s_half_pre),
-  nH_pre      = median(tra_samples$nH_pre),
-  B_max_post  = median(tra_samples$b_max),
-  s_half_post = median(tra_samples$s_half_post),
-  nH_post     = median(tra_samples$nH_post)
-)
+# The value of p_A each antimalarial arm uses: the ATN prior for a net with no
+# insecticide, the AITN prior for one co-treated with insecticide. The ATN rows of
+# the mixed-delivery arm are ATNs.
+p_a_of_arm <- c(atn = "p_a_atn", pyr_atn = "p_a_aitn", pyr_cfp_atn = "p_a_aitn",
+                pyr_cfp_mc_atn_cd = "p_a_atn")
+
+# The inputs of simulation i (row i of the draws table).
+row_inputs <- function(i) {
+  d <- draws_tab[i, ]
+  hl_years <- if (is.null(hl_fixed_years)) d$half_life_atn_years else hl_fixed_years
+  list(
+    kern = list(
+      s_half_eip  = d$s_half_eip,
+      nH_eip      = d$nH_eip,
+      rho_frac    = d$rho_frac,
+      s_half_pre  = d$s_half_pre,
+      nH_pre      = d$nH_pre,
+      B_max_post  = d$B_max_post,
+      s_half_post = d$s_half_post,
+      nH_post     = d$nH_post
+    ),
+    omega_atn = d$omega_atn,
+    p_a       = c(p_a_atn = d$p_a_atn, p_a_aitn = d$p_a_aitn),
+    hl_days   = hl_years * 365,   # antimalarial half-life
+    itn_draw  = d$itn_draw
+  )
+}
 
 render_overrides <- list(
   human_population                      = human_pop,
@@ -283,7 +349,9 @@ build_past_schedule <- function(idf) {
   )
 }
 
-build_future_schedule <- function(arm, region) {
+# inp: the row's inputs, from row_inputs(); its ITN draw sets the efficacy of the
+# insecticidal nets, and its antimalarial half-life the decay of an ATN's netting.
+build_future_schedule <- function(arm, region, inp) {
   if (arm == "none") return(NULL)
 
   grid    <- unique(round(seq(future_start_day, n_steps, by = cd_interval)))
@@ -309,47 +377,41 @@ build_future_schedule <- function(arm, region) {
     dn0 <- rep(0, n)
     rn  <- rep(0.24, n)
     rnm <- rep(0.24 - 1e-9, n)
-    gam <- rep(ANTIMAL_HL_DAYS, n)
+    gam <- rep(inp$hl_days, n)
   } else if (arm == "pyr_cfp_mc_atn_cd") {
     # Mixed-delivery: Pyr-CFP (insecticidal) for mass-campaign rows;
     # non-insecticidal ATN for CD top-up rows.
-    p_list_mc <- lapply(res_grid[is_camp], function(r) med_net(cfp_pars, r))
+    p_mc <- net_draw("cfp", inp$itn_draw, res_grid[is_camp])
     dn0 <- rn <- gam <- numeric(n)
     rnm <- numeric(n)
     # MC rows: Pyr-CFP efficacy, resistance-projected
-    dn0[is_camp]  <- vapply(p_list_mc, `[[`, numeric(1), "dn0")
-    rn [is_camp]  <- vapply(p_list_mc, `[[`, numeric(1), "rn0")
+    dn0[is_camp]  <- p_mc$dn0
+    rn [is_camp]  <- p_mc$rn0
     rnm[is_camp]  <- 0.24
-    gam[is_camp]  <- vapply(p_list_mc, `[[`, numeric(1), "gamman")
+    gam[is_camp]  <- p_mc$gamman
     # CD rows: non-insecticidal ATN
     dn0[!is_camp] <- 0
     rn [!is_camp] <- 0.24
     rnm[!is_camp] <- 0.24 - 1e-9
-    gam[!is_camp] <- ANTIMAL_HL_DAYS
+    gam[!is_camp] <- inp$hl_days
   } else {
-    # Select the appropriate Churcher 2024 efficacy table for this arm.
-    # pyr_atn uses pyr-only params; pyr_cfp_atn uses cfp params.
-    pars_use <- switch(arm,
-      pyr         = only_pars,
-      pyr_atn     = only_pars,
-      pyr_pbo     = pbo_pars,
-      pyr_cfp     = cfp_pars,
-      pyr_cfp_atn = cfp_pars
-    )
-    p_list <- lapply(res_grid, function(r) med_net(pars_use, r))
-    dn0    <- vapply(p_list, `[[`, numeric(1), "dn0")
-    rn     <- vapply(p_list, `[[`, numeric(1), "rn0")
-    rnm    <- rep(0.24, n)
-    gam    <- vapply(p_list, `[[`, numeric(1), "gamman")
+    # The row's draw of the arm's net, at each year's projected resistance.
+    p_net <- net_draw(net_of_arm[[arm]], inp$itn_draw, res_grid)
+    dn0   <- p_net$dn0
+    rn    <- p_net$rn0
+    rnm   <- rep(0.24, n)
+    gam   <- p_net$gamman
   }
   list(timesteps = grid, coverages = cov, dn0 = dn0, rn = rn, rnm = rnm, gam = gam,
        is_camp = is_camp)
 }
 
 # ---------------------------------------------------------------------
-# 7. Build parameters for one region x arm
+# 7. Build parameters for one region x arm x row of the draws table
 # ---------------------------------------------------------------------
-build_params <- function(region, arm) {
+build_params <- function(region, arm, draw) {
+
+  inp <- row_inputs(draw)
 
   site_row <- site_obj$sites[site_obj$sites$name_1 == region, , drop = FALSE]
   ms       <- site::subset_site(site_obj, site_row)
@@ -386,21 +448,22 @@ build_params <- function(region, arm) {
     }
   }
 
-  fsch <- build_future_schedule(arm, region)
+  fsch <- build_future_schedule(arm, region, inp)
 
-  # ATN construction-time overrides for antimalarial arms.
-  # gamma_atn is fixed (ANTIMAL_HL_DAYS), not derived from net params.
+  # ATN construction-time overrides for antimalarial arms, all from the row:
+  # p_A by net type, the potency decay rate from the antimalarial half-life,
+  # omega_atn and the kernel parameters. Other arms keep the defaults (ATN off).
   atn_overrides <- list()
   if (arm %in% c("atn", "pyr_atn", "pyr_cfp_atn")) {
     atn_overrides <- c(list(
-      p_atn         = 0.9,
+      p_atn         = inp$p_a[[p_a_of_arm[[arm]]]],
       deltaq        = deltaq_use,
-      gamma_atn     = gamma_atn,
-      omega_atn     = omega_atn_use,
+      gamma_atn     = log(2) / inp$hl_days,
+      omega_atn     = inp$omega_atn,
       Q0_atn        = fsch$coverages,
       t0_atn        = fsch$timesteps,
       n_atn         = length(fsch$timesteps)
-    ), atn_kern)
+    ), inp$kern)
   } else if (arm == "pyr_cfp_mc_atn_cd") {
     # Mixed-delivery: drug events = CD rows only; MC rows are non-drug displacement
     # events that overwrite ATN holders in the IBM but deliver no antimalarial.
@@ -412,16 +475,16 @@ build_params <- function(region, arm) {
     mc_t0  <- fsch$timesteps[mc_rows]
     mc_Q0  <- fsch$coverages[mc_rows]
     atn_overrides <- c(list(
-      p_atn             = 0.9,
+      p_atn             = inp$p_a[[p_a_of_arm[[arm]]]],
       deltaq            = deltaq_use,
-      gamma_atn         = gamma_atn,
-      omega_atn         = omega_atn_use,
+      gamma_atn         = log(2) / inp$hl_days,
+      omega_atn         = inp$omega_atn,
       t0_atn            = cd_t0,
       Q0_atn            = cd_Q0,
       n_atn             = length(cd_t0),
       atn_displace_t0   = mc_t0,
       atn_displace_Q0   = mc_Q0
-    ), atn_kern)
+    ), inp$kern)
   }
 
   p <- site::site_parameters(
@@ -462,25 +525,32 @@ build_params <- function(region, arm) {
 }
 
 # ---------------------------------------------------------------------
-# 8. Run one region x arm row
+# 8. Run one region x arm x draw
 #    Keeps ALL run_simulation columns (incl. Sv/Ev/Iv_*_count, EIR_<species>).
+#    The seed is set immediately before the simulation; run_simulation() seeds
+#    the model's own C++ generator from R's, so this fixes every random draw.
 # ---------------------------------------------------------------------
 run_one <- function(row) {
-  region <- row$region; arm <- row$arm
+  region <- row$region; arm <- row$arm; draw <- row$draw
+  seed <- SEED_BASE + draw
   tryCatch({
-    p <- build_params(region, arm)
+    p <- build_params(region, arm, draw)
+    set.seed(seed)
     r <- run_simulation(timesteps = n_steps, parameters = p)
     as.data.frame(r) |>
       mutate(
         region    = region,
         arm       = arm,
+        draw      = draw,
+        seed      = seed,
         year_rel  = (timestep - future_start_day) / 365,
         pfpr2to10 = n_detect_lm_730_3649 / n_age_730_3649,
         clin_inc  = n_inc_clinical_0_1824 + n_inc_clinical_1825_5474 + n_inc_clinical_5475_36499,
         EIR_total_pp = rowSums(across(starts_with("EIR_"))) / human_pop
       )
   }, error = function(e) {
-    list(.__error__ = TRUE, region = region, arm = arm, message = conditionMessage(e))
+    list(.__error__ = TRUE, region = region, arm = arm, draw = draw,
+         message = conditionMessage(e))
   })
 }
 
@@ -492,14 +562,15 @@ if (isTRUE(getOption("country_test_mode"))) {
   message("country_test_mode = TRUE: setup complete, skipping parallel sweep.")
 } else {
 
-grid_df <- expand.grid(region = regions, arm = arms, stringsAsFactors = FALSE)
+grid_df <- expand.grid(region = regions, arm = arms, draw = draw_rows,
+                       stringsAsFactors = FALSE)
 rows    <- split(grid_df, seq_len(nrow(grid_df)))
 
 cl <- parallel::makeCluster(N_CORES, setup_strategy = "sequential", outfile = "")
 on.exit(parallel::stopCluster(cl), add = TRUE)
 
 # Each worker loads the same malariasimulation as this session, and this package
-# (for expand_interventions), before the functions below are sent to it.
+# (for expand_interventions()), before the functions and data below are sent to it.
 parallel::clusterExport(cl, c("FORK_PATH", "ATNET_PATH"))
 parallel::clusterEvalQ(cl, {
   suppressMessages({ library(site); library(dplyr); library(tidyr) })
@@ -511,12 +582,11 @@ parallel::clusterEvalQ(cl, {
   pkgload::load_all(ATNET_PATH, quiet = TRUE, compile = FALSE)
 })
 parallel::clusterExport(cl, c(
-  "build_params", "build_past_schedule", "build_future_schedule", "med_net",
-  "run_one",
+  "build_params", "build_past_schedule", "build_future_schedule", "net_draw",
+  "row_inputs", "run_one",
   "site_obj", "regions", "start_year", "hist_last", "future_yr0",
   "future_start_day", "future_campaign_days", "n_steps", "n_future_years",
-  "cfp_pars", "only_pars", "pbo_pars", "atn_kern", "gamma_atn", "ANTIMAL_HL_DAYS",
-  "omega_atn_use",
+  "draws_tab", "itn_draws", "net_of_arm", "p_a_of_arm", "hl_fixed_years", "SEED_BASE",
   "cd_cov", "campaign_cov", "cd_interval", "retention_time", "deltaq_use",
   "render_overrides", "form_overrides", "human_pop",
   "future_interventions"
@@ -530,7 +600,7 @@ message(sprintf("Done %d runs in %.0f s", length(rows),
 is_error <- vapply(res_list, function(x) isTRUE(x$.__error__), logical(1))
 if (any(is_error)) {
   failures <- dplyr::bind_rows(lapply(res_list[is_error], function(x)
-    data.frame(region = x$region, arm = x$arm, message = x$message,
+    data.frame(region = x$region, arm = x$arm, draw = x$draw, message = x$message,
                stringsAsFactors = FALSE)))
   message(sprintf("WARNING: %d job(s) failed and excluded from output:", sum(is_error)))
   print(failures)
@@ -544,10 +614,17 @@ saveRDS(list(
   results = df_full,
   shape   = site_obj$shape$level_1,
   meta    = list(
-    param_set      = "churcher2024_median",
+    param_set      = "draws",
+    draws_file     = DRAWS_FILE,
+    draws_md5      = unname(tools::md5sum(DRAWS_FILE)),
+    draw_rows      = draw_rows,
+    seed_base      = SEED_BASE,
+    itn_draws_source = itn_draws_source()[c("repo", "commit", "md5")],
+    atnet_commit   = tryCatch(system("git rev-parse HEAD", intern = TRUE),
+                              error = function(e) NA_character_,
+                              warning = function(w) NA_character_),
     country_iso    = COUNTRY_ISO,
     country_name   = country_name,
-    fit_dir        = FIT_DIR,
     start_year     = start_year,
     hist_last      = hist_last,
     future_yr0     = future_yr0,
@@ -562,12 +639,8 @@ saveRDS(list(
     retention_time = retention_time,
     cd_floor       = cd_floor,
     cd_cov         = cd_cov,
-    gamma_atn      = gamma_atn,
-    ANTIMAL_HL_DAYS = ANTIMAL_HL_DAYS,
-    hl_years       = hl_years,
+    hl_fixed_years = hl_fixed_years,   # NULL = each row's drawn half-life
     hl_tag         = hl_tag,
-    omega_atn      = omega_atn_use,
-    omega_tag      = omega_tag,
     arms           = arms
   )
 ), OUT_FILE)

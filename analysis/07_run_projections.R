@@ -47,10 +47,18 @@
 #                       e.g. 1, 2.5 or 5; unset = each row's drawn value
 #     SWEEP_ARMS        comma-separated subset of arms (e.g. the three ATN
 #                       arms for the fixed half-life runs)
+#     SWEEP_REGIONS     comma-separated subset of regions (default all)
+#     STOP_BY           e.g. "2026-10-12 04:00" (local time): no job is started
+#                       that would not finish by then, judged by the slowest job
+#                       already saved; the sweep then ends and saves its summary
 #     SWEEP_CORES, NET_RETENTION_DAYS, OUT_SUFFIX, ATN_FORK_PATH: see below
-#   Results go to outputs/projections/<iso>_projections_rows<a>-<b>_hl<tag>.rds
-#   (hl tag "drawn", or the fixed half-life), and an existing file is never
-#   overwritten.
+#   Results go to the folder outputs/projections/<iso>_hl<tag> (hl tag "drawn",
+#   or the fixed half-life), one file per region and row in jobs/ holding its
+#   2022-2024 segment and every arm, with the columns in keep_columns and each
+#   segment's run time. A job whose file exists is skipped, so a stopped sweep
+#   is restarted by launching it again; nothing is overwritten. Each sweep also
+#   writes sweep_rows<a>-<b>.rds (settings, run times, failures), and the
+#   folder's settings.rds stops a later batch of rows from mixing settings.
 #
 #   Change COUNTRY_ISO to run any available country. Default: MLI (Mali).
 #
@@ -60,7 +68,7 @@
 #                       (copied from the fork's dev/site_files/without_split/)
 #     draws table       inst/extdata/projection_draws.csv
 #     ITN draws         inst/extdata/churcher2024_itn_draws/
-#     results           outputs/projections/
+#     results           outputs/projections/ (histories in history/)
 #   and expand_interventions() is a function of this package.
 #
 #   Run with the working directory at the root of this package. The
@@ -94,6 +102,9 @@ fork_version <- if (nzchar(FORK_PATH)) {
   d <- utils::packageDescription("malariasimulation")
   paste(c(d$Version, d$RemoteRef, d$RemoteSha), collapse = " ")
 }
+# And which version of this package ("-dirty" = uncommitted changes).
+atnet_version <- tryCatch(system(sprintf('git -C "%s" describe --always --dirty', ATNET_PATH), intern = TRUE),
+                          error = function(e) NA_character_, warning = function(w) NA_character_)
 library(site)
 library(dplyr); library(tidyr)
 library(parallel)
@@ -151,7 +162,7 @@ branch_year <- 2022L
 # Saved 2000-2021 histories, one file per region, reused by every later batch of
 # rows (and by the fixed half-life runs). A history is reused only if its
 # parameters are identical to the ones this run would build.
-HISTORY_DIR <- file.path("outputs", "projections", "history")
+HISTORY_DIR <- file.path(ATNET_PATH, "outputs", "projections", "history")
 
 # ANTIMAL_HL_YEARS: fix the antimalarial half-life (years) in every row, for the
 # sensitivity runs at 1, 2.5 and 5 years; everything else still comes from the
@@ -167,14 +178,15 @@ if (!is.null(hl_fixed_years) && !(is.finite(hl_fixed_years) && hl_fixed_years > 
 hl_tag <- if (is.null(hl_fixed_years)) "drawn" else
   gsub("\\.", "p", format(hl_fixed_years, trim = TRUE))  # 2.5 -> "2p5", 5 -> "5"
 
-# OUT_SUFFIX: extra tag appended to the filename (before .rds), e.g. for retention
-# sweeps or add-on arm runs. An existing results file is never overwritten.
+# OUT_SUFFIX: extra tag appended to the results folder name, e.g. for retention
+# sweeps or add-on arm runs. Nothing in it is ever overwritten.
 out_extra_suffix <- Sys.getenv("OUT_SUFFIX", "")
-OUT_FILE <- sprintf("outputs/projections/%s_projections_rows%d-%d_hl%s%s.rds",
-                    tolower(COUNTRY_ISO), draw_bounds[1], draw_bounds[2], hl_tag,
-                    out_extra_suffix)
-if (file.exists(OUT_FILE) && !isTRUE(getOption("country_test_mode"))) {
-  stop(OUT_FILE, " already exists. Move it, or set OUT_SUFFIX.", call. = FALSE)
+OUT_DIR    <- file.path(ATNET_PATH, "outputs", "projections",
+                        sprintf("%s_hl%s%s", tolower(COUNTRY_ISO), hl_tag, out_extra_suffix))
+JOB_DIR    <- file.path(OUT_DIR, "jobs")
+SWEEP_FILE <- file.path(OUT_DIR, sprintf("sweep_rows%d-%d.rds", draw_bounds[1], draw_bounds[2]))
+if (file.exists(SWEEP_FILE) && !isTRUE(getOption("country_test_mode"))) {
+  stop(SWEEP_FILE, " already exists: these rows are done. Move it, or set OUT_SUFFIX.", call. = FALSE)
 }
 
 # SWEEP_CORES: number of parallel workers. Override via env var for concurrent runs.
@@ -185,8 +197,21 @@ N_CORES <- if (nchar(sweep_cores_env) > 0L) {
   min(16L, max(1L, parallel::detectCores() - 1L))
 }
 
+stop_by_env <- Sys.getenv("STOP_BY", "")
+stop_by <- if (nzchar(stop_by_env)) as.POSIXct(stop_by_env, format = "%Y-%m-%d %H:%M") else NULL
+if (!is.null(stop_by) && (is.na(stop_by) || stop_by <= Sys.time())) {
+  stop("STOP_BY must be a future local time as YYYY-MM-DD HH:MM, not '", stop_by_env, "'.",
+       call. = FALSE)
+}
+
 human_pop      <- 100000L
 n_future_years <- 7L      # 2025-2031: campaigns in 2025, 2028 and 2031
+# Columns kept from 2022 on (regular expressions; daily values). The history files
+# keep every column. M_exposed_<species> is the species' ATN-exposed adults
+# (S, E and I) and total_M_<species> all its adults; see annotate().
+keep_columns <- c("^timestep$", "^n_detect_lm_", "^n_age_", "^n_inc_clinical_",
+                  "^n_inc_severe_", "^EIR_", "^total_M_", "^M_exposed_", "^n_use_net$",
+                  "^n_use_atn$", "^(region|arm|draw|seed|year_rel|pfpr2to10|clin_inc)$")
 # Mass campaigns are this many calendar months before the month of peak rainfall,
 # at the start of the month (so 60-90 days before the peak); see section 5.
 campaign_months_before_peak <- 2L
@@ -231,7 +256,7 @@ message(sprintf("Draw rows: %d-%d (%d) | seeds %d-%d | cores: %d", draw_bounds[1
 message(sprintf("Antimalarial half-life: %s | arms: %s",
                 if (is.null(hl_fixed_years)) "drawn per row" else sprintf("fixed at %g yr", hl_fixed_years),
                 paste(arms, collapse = ",")))
-message(sprintf("OUT_FILE: %s", OUT_FILE))
+message(sprintf("OUT_DIR: %s", OUT_DIR))
 
 retention_time <- if (!is.null(retention_override)) retention_override else retention_years * 365
 message(sprintf("Net retention = %.1f days (%s)", retention_time,
@@ -335,6 +360,21 @@ form_overrides <- list(use_eip_hill = TRUE, use_bompard = TRUE)
 # 5. Load site; establish the calendar
 # ---------------------------------------------------------------------
 regions    <- site_obj$sites$name_1
+# SWEEP_REGIONS: run only these regions (names with or without accents, e.g.
+# Segou); the calendar still uses every region.
+sweep_regions_env <- Sys.getenv("SWEEP_REGIONS", "")
+sweep_regions <- regions
+if (nzchar(sweep_regions_env)) {
+  ascii <- function(x) iconv(x, to = "ASCII//TRANSLIT")
+  pick  <- trimws(strsplit(sweep_regions_env, ",")[[1]])
+  hit   <- match(ascii(pick), ascii(regions))
+  if (anyNA(hit)) {
+    stop("SWEEP_REGIONS: no region called ", paste(pick[is.na(hit)], collapse = ", "),
+         ". Regions: ", paste(regions, collapse = ", "), call. = FALSE)
+  }
+  sweep_regions <- regions[hit]
+}
+message(sprintf("Regions: %s", paste(sweep_regions, collapse = ", ")))
 start_year <- min(site_obj$interventions$year)
 hist_last  <- max(site_obj$interventions$year)
 future_yr0 <- hist_last + 1L
@@ -598,14 +638,19 @@ build_params <- function(region, arm, draw) {
 
 # ---------------------------------------------------------------------
 # 8. The three segments
-#    Each keeps ALL rendered columns (incl. Sv/Ev/Iv_*_count, EIR_<species>).
+#    The history keeps ALL rendered columns; from 2022 only keep_columns.
 #    A seed is set immediately before each segment that does not restore the
 #    saved random-number state; run_resumable_simulation() seeds the model's
 #    own C++ generator from R's, so this fixes every random draw. Resuming was
 #    checked to reproduce an uninterrupted run exactly (7a.1, 2026-10-11).
 # ---------------------------------------------------------------------
 annotate <- function(d, region, arm, draw, seed) {
-  as.data.frame(d) |>
+  d <- as.data.frame(d)
+  for (sp in sub("^total_M_", "", grep("^total_M_", names(d), value = TRUE))) {
+    d[[paste0("M_exposed_", sp)]] <-
+      rowSums(d[grep(sprintf("^(Sv|Ev|Iv)_exposed_%s_count$", sp), names(d))])
+  }
+  d |>
     mutate(
       region    = region,
       arm       = arm,
@@ -618,11 +663,29 @@ annotate <- function(d, region, arm, draw, seed) {
     )
 }
 
+trim_columns <- function(d) d[grepl(paste(keep_columns, collapse = "|"), names(d))]
+
+region_tag <- function(region) gsub("[^A-Za-z0-9]", "", iconv(region, to = "ASCII//TRANSLIT"))
+
 history_file <- function(region) {
-  tag <- gsub("[^A-Za-z0-9]", "", iconv(region, to = "ASCII//TRANSLIT"))
-  file.path(HISTORY_DIR, sprintf("%s_%s_pop%d_ret%d.rds", tolower(COUNTRY_ISO), tag,
+  file.path(HISTORY_DIR, sprintf("%s_%s_pop%d_ret%d.rds", tolower(COUNTRY_ISO), region_tag(region),
                                  human_pop, round(retention_time)))
 }
+
+job_file <- function(job) {
+  file.path(JOB_DIR, sprintf("%s_%s_row%04d.rds", tolower(COUNTRY_ISO), region_tag(job$region), job$draw))
+}
+
+# Written under a temporary name and then renamed, so a run stopped mid-write
+# leaves no half-written file behind.
+save_whole <- function(x, f) {
+  dir.create(dirname(f), recursive = TRUE, showWarnings = FALSE)
+  tmp <- paste0(f, ".tmp")
+  saveRDS(x, tmp)
+  if (!file.rename(tmp, f)) stop("Could not rename ", tmp, " to ", f, call. = FALSE)
+}
+
+minutes_since <- function(t0) (proc.time()[["elapsed"]] - t0) / 60
 
 # Segment 1: the region's 2000-2021 history, run once and saved. An existing
 # file is reused only if it was built from identical parameters and seed.
@@ -635,19 +698,21 @@ run_history <- function(region) {
         !identical(h$end_day, history_end_day)) {
       stop(f, " was made with different inputs. Move it to rebuild the history.", call. = FALSE)
     }
-    return(list(region = region, file = f, reused = TRUE))
+    return(list(region = region, file = f, reused = TRUE, minutes = h$minutes))
   }
+  t0 <- proc.time()[["elapsed"]]
   # As in malariasimulation's own resume tests: build the correlations once,
   # here, and let the later segments restore them from the saved state.
   correlations <- get_correlation_parameters(p)
   invisible(correlations$mvnorm())
   set.seed(SEED_BASE)
   r <- run_resumable_simulation(history_end_day, parameters = p, correlations = correlations)
-  dir.create(dirname(f), recursive = TRUE, showWarnings = FALSE)
-  saveRDS(list(region = region, parameters = p, seed = SEED_BASE, end_day = history_end_day,
-               fork_version = fork_version, state = r$state,
-               data = annotate(r$data, region, "history", NA_integer_, SEED_BASE)), f)
-  list(region = region, file = f, reused = FALSE)
+  minutes <- minutes_since(t0)
+  save_whole(list(region = region, parameters = p, seed = SEED_BASE, end_day = history_end_day,
+                  fork_version = fork_version, minutes = minutes, state = r$state,
+                  data = annotate(r$data, region, "history", NA_integer_, SEED_BASE)), f)
+  message(sprintf("History %s: %.1f min", region, minutes))
+  list(region = region, file = f, reused = FALSE, minutes = minutes)
 }
 
 # Segments 2 and 3 for one region and row: 2022-2024 with the row's seed and
@@ -659,6 +724,8 @@ run_row <- function(job, end_day = n_steps) {
   seed <- SEED_BASE + draw
   fail <- function(arm, e) data.frame(region = region, arm = arm, draw = draw,
                                       message = conditionMessage(e), stringsAsFactors = FALSE)
+  minutes <- setNames(rep(NA_real_, length(arms) + 1L), c("2022-2024", arms))
+  t0 <- proc.time()[["elapsed"]]
   pre <- tryCatch({
     h <- readRDS(history_file(region))
     p_pre <- build_params(region, "none", draw)
@@ -666,17 +733,61 @@ run_row <- function(job, end_day = n_steps) {
     run_resumable_simulation(pre_end_day, parameters = p_pre,
                              initial_state = h$state, restore_random_state = FALSE)
   }, error = function(e) fail("2022-2024", e))
-  if (is.data.frame(pre)) return(list(failures = pre))
-  out <- lapply(arms, function(arm) tryCatch({
-    p <- build_params(region, arm, draw)
-    r <- run_resumable_simulation(end_day, parameters = p,
-                                  initial_state = pre$state, restore_random_state = TRUE)
-    annotate(r$data, region, arm, draw, seed)
-  }, error = function(e) fail(arm, e)))
+  minutes[["2022-2024"]] <- minutes_since(t0)
+  if (is.data.frame(pre)) return(list(failures = pre, minutes = minutes))
+  out <- lapply(arms, function(arm) {
+    t0 <- proc.time()[["elapsed"]]
+    x <- tryCatch({
+      p <- build_params(region, arm, draw)
+      r <- run_resumable_simulation(end_day, parameters = p,
+                                    initial_state = pre$state, restore_random_state = TRUE)
+      trim_columns(annotate(r$data, region, arm, draw, seed))
+    }, error = function(e) fail(arm, e))
+    minutes[[arm]] <<- minutes_since(t0)
+    x
+  })
   failed <- vapply(out, function(x) "message" %in% names(x), logical(1))
-  list(pre_projection = annotate(pre$data, region, "2022-2024", draw, seed),
+  list(pre_projection = trim_columns(annotate(pre$data, region, "2022-2024", draw, seed)),
        results = dplyr::bind_rows(out[!failed]),
-       failures = dplyr::bind_rows(out[failed]))
+       failures = dplyr::bind_rows(out[failed]),
+       minutes = minutes)
+}
+
+# TRUE if STOP_BY is set and a job started now would not finish by then, taking
+# a job to last as long as the slowest one saved so far (any job, before the
+# first is saved).
+too_late <- function() {
+  if (is.null(stop_by)) return(FALSE)
+  saved <- list.files(JOB_DIR, "\\.rds$", full.names = TRUE)
+  longest <- if (length(saved)) max(vapply(saved, function(g) sum(readRDS(g)$minutes, na.rm = TRUE),
+                                           numeric(1))) else 0
+  Sys.time() + 60 * longest > stop_by
+}
+
+# One job of the sweep: region and row. Skipped if its file exists; otherwise
+# runs the row and saves it, and returns only a summary, so no results are held
+# in memory. Any error is recorded as a failure rather than stopping the sweep.
+run_job <- function(job, end_day = n_steps) {
+  f <- job_file(job)
+  summary <- function(skipped, failures, minutes, started = !skipped) {
+    list(region = job$region, draw = job$draw, file = f, skipped = skipped,
+         started = started, failures = failures, minutes = minutes)
+  }
+  if (file.exists(f)) return(summary(TRUE, NULL, readRDS(f)$minutes))
+  if (too_late()) return(summary(FALSE, NULL, NULL, started = FALSE))
+  tryCatch({
+    x <- run_row(job, end_day)
+    save_whole(c(list(region = job$region, draw = job$draw, seed = SEED_BASE + job$draw,
+                      end_day = end_day, fork_version = fork_version,
+                      atnet_version = atnet_version,
+                      history_md5 = unname(tools::md5sum(history_file(job$region)))), x), f)
+    message(sprintf("Job %s row %d: %.0f min, %d failure(s)", job$region, job$draw,
+                    sum(x$minutes, na.rm = TRUE), NROW(x$failures)))
+    summary(FALSE, x$failures, x$minutes)
+  }, error = function(e) {
+    summary(FALSE, data.frame(region = job$region, arm = "job", draw = job$draw,
+                              message = conditionMessage(e), stringsAsFactors = FALSE), NULL)
+  })
 }
 
 # ---------------------------------------------------------------------
@@ -687,8 +798,42 @@ if (isTRUE(getOption("country_test_mode"))) {
   message("country_test_mode = TRUE: setup complete, skipping parallel sweep.")
 } else {
 
-jobs <- expand.grid(region = regions, draw = draw_rows, stringsAsFactors = FALSE)
+
+# The settings that shape every job's results. The first sweep into OUT_DIR
+# records them; a later batch of rows must match, so one folder never mixes runs.
+run_settings <- list(
+  country_iso      = COUNTRY_ISO,
+  fork_version     = fork_version,
+  draws_md5        = unname(tools::md5sum(DRAWS_FILE)),
+  itn_draws_source = itn_draws_source()[c("repo", "commit", "md5")],
+  human_pop        = human_pop,
+  retention_time   = retention_time,
+  campaign_cov     = campaign_cov,
+  cd_floor_frac    = cd_floor_frac,
+  hl_fixed_years   = hl_fixed_years,   # NULL = each row's drawn half-life
+  arms             = arms,
+  n_steps          = n_steps,
+  deltaq_use       = deltaq_use,
+  seed_base        = SEED_BASE,
+  branch_year      = branch_year,
+  future_campaign_days = future_campaign_days,
+  keep_columns     = keep_columns
+)
+settings_file <- file.path(OUT_DIR, "settings.rds")
+if (file.exists(settings_file)) {
+  if (!identical(readRDS(settings_file), run_settings)) {
+    stop(OUT_DIR, " holds runs with other settings (see its settings.rds). ",
+         "Move the folder, or set OUT_SUFFIX.", call. = FALSE)
+  }
+} else {
+  save_whole(run_settings, settings_file)
+}
+
+# Region varies fastest, so whole rows finish first.
+jobs <- expand.grid(region = sweep_regions, draw = draw_rows, stringsAsFactors = FALSE)
 jobs <- lapply(seq_len(nrow(jobs)), function(k) as.list(jobs[k, ]))
+message(sprintf("Jobs: %d (%d already saved, skipped)", length(jobs),
+                sum(vapply(jobs, function(j) file.exists(job_file(j)), logical(1)))))
 
 cl <- parallel::makeCluster(N_CORES, setup_strategy = "sequential", outfile = "")
 on.exit(parallel::stopCluster(cl), add = TRUE)
@@ -707,19 +852,20 @@ parallel::clusterEvalQ(cl, {
 })
 parallel::clusterExport(cl, c(
   "build_params", "build_past_schedule", "build_future_schedule", "net_draw",
-  "row_inputs", "annotate", "history_file", "run_history", "run_row",
+  "row_inputs", "annotate", "trim_columns", "region_tag", "history_file", "job_file",
+  "save_whole", "minutes_since", "run_history", "run_row", "run_job", "too_late", "stop_by",
   "site_obj", "regions", "arms", "start_year", "hist_last", "future_yr0",
   "future_start_day", "history_end_day", "pre_end_day", "branch_year", "future_campaign_days",
   "n_steps", "n_future_years", "draws_tab", "itn_draws", "net_of_arm",
   "net_of_site_type", "p_a_of_arm", "hl_fixed_years", "SEED_BASE",
   "cd_cov", "campaign_cov", "cd_interval", "retention_time", "deltaq_use",
   "render_overrides", "form_overrides", "human_pop", "future_interventions",
-  "COUNTRY_ISO", "HISTORY_DIR", "fork_version"
+  "COUNTRY_ISO", "HISTORY_DIR", "JOB_DIR", "keep_columns", "fork_version", "atnet_version"
 ))
 
 # Segment 1: the shared histories, one job per region (reused when saved).
 t0 <- proc.time()[["elapsed"]]
-hist_res <- parallel::parLapplyLB(cl, regions, function(r)
+hist_res <- parallel::parLapplyLB(cl, sweep_regions, function(r)
   tryCatch(run_history(r), error = function(e) list(region = r, error = conditionMessage(e))))
 hist_err <- vapply(hist_res, function(x) !is.null(x$error), logical(1))
 if (any(hist_err)) {
@@ -731,45 +877,60 @@ message(sprintf("Histories: %d built, %d reused, %.0f s",
                 sum(vapply(hist_res, `[[`, logical(1), "reused")),
                 proc.time()[["elapsed"]] - t0))
 
-# Segments 2 and 3: one job per region and row, its arms run inside the job.
-t0 <- proc.time()[["elapsed"]]
-res_list <- parallel::parLapplyLB(cl, jobs, run_row)
-message(sprintf("Done %d region x row jobs (%d arms each) in %.0f s", length(jobs),
-                length(arms), proc.time()[["elapsed"]] - t0))
-
-failures <- dplyr::bind_rows(lapply(res_list, `[[`, "failures"))
-if (nrow(failures)) {
-  message(sprintf("WARNING: %d segment(s) failed and excluded from output:", nrow(failures)))
-  print(failures)
-  write.csv(failures,
-            sub("\\.rds$", "_failures.csv", OUT_FILE),
-            row.names = FALSE)
+# A saved job is skipped only if it was run from the history now in place (for
+# example, not from a history since rebuilt after recalibration).
+done <- Filter(function(j) file.exists(job_file(j)), jobs)
+stale <- Filter(function(j) !identical(readRDS(job_file(j))$history_md5,
+                                       unname(tools::md5sum(history_file(j$region)))), done)
+if (length(stale)) {
+  stop(length(stale), " saved job(s) were run from a different history, e.g. ", job_file(stale[[1]]),
+       ". Move the results folder, or set OUT_SUFFIX.", call. = FALSE)
 }
-dir.create(dirname(OUT_FILE), recursive = TRUE, showWarnings = FALSE)
-saveRDS(list(
-  history        = dplyr::bind_rows(lapply(regions, function(r) readRDS(history_file(r))$data)),
-  pre_projection = dplyr::bind_rows(lapply(res_list, `[[`, "pre_projection")),
-  results        = dplyr::bind_rows(lapply(res_list, `[[`, "results")),
-  shape   = site_obj$shape$level_1,
-  meta    = list(
+
+# Segments 2 and 3: one job per region and row, its arms run inside the job.
+# Each worker saves its own job file.
+t0 <- proc.time()[["elapsed"]]
+job_res <- parallel::parLapplyLB(cl, jobs, run_job)
+message(sprintf("Done %d region x row jobs (%d arms each) in %.0f s; %d not started (STOP_BY)",
+                length(jobs), length(arms), proc.time()[["elapsed"]] - t0,
+                sum(!vapply(job_res, `[[`, logical(1), "started") &
+                    !vapply(job_res, `[[`, logical(1), "skipped"))))
+
+failures <- dplyr::bind_rows(lapply(job_res, `[[`, "failures"))
+if (nrow(failures)) {
+  message(sprintf("WARNING: %d segment(s) failed and are missing from the job files:", nrow(failures)))
+  print(failures)
+  write.csv(failures, sub("\\.rds$", "_failures.csv", SWEEP_FILE), row.names = FALSE)
+}
+# Run time of each segment (minutes), for the timing of larger runs.
+job_minutes <- dplyr::bind_rows(lapply(job_res, function(x) {
+  if (is.null(x$minutes)) return(NULL)
+  data.frame(region = x$region, draw = x$draw, segment = names(x$minutes),
+             minutes = unname(x$minutes), skipped = x$skipped, stringsAsFactors = FALSE)
+}))
+save_whole(list(
+  jobs     = data.frame(region = vapply(job_res, `[[`, character(1), "region"),
+                        draw   = vapply(job_res, `[[`, integer(1), "draw"),
+                        file   = vapply(job_res, `[[`, character(1), "file"),
+                        skipped = vapply(job_res, `[[`, logical(1), "skipped"),
+                        started = vapply(job_res, `[[`, logical(1), "started"),
+                        stringsAsFactors = FALSE),
+  failures = failures,
+  minutes  = job_minutes,
+  history_minutes = vapply(hist_res, function(x) if (is.null(x$minutes)) NA_real_ else x$minutes,
+                           numeric(1)),
+  shape    = site_obj$shape$level_1,
+  meta     = c(run_settings, list(
     param_set      = "draws",
     design         = paste0("history 2000-", branch_year - 1L, " shared per region (seed seed_base); ",
                             branch_year, "-", future_yr0 - 1L, " per row (seed seed_base + row, ITN draw); ",
                             future_yr0, " on: arms resumed from the row's state"),
-    branch_year    = branch_year,
     history_end_day = history_end_day,
     pre_end_day    = pre_end_day,
-    history_files  = vapply(regions, history_file, character(1)),
-    fork_version   = fork_version,
+    history_files  = vapply(sweep_regions, history_file, character(1)),
     draws_file     = DRAWS_FILE,
-    draws_md5      = unname(tools::md5sum(DRAWS_FILE)),
     draw_rows      = draw_rows,
-    seed_base      = SEED_BASE,
-    itn_draws_source = itn_draws_source()[c("repo", "commit", "md5")],
-    atnet_commit   = tryCatch(system("git rev-parse HEAD", intern = TRUE),
-                              error = function(e) NA_character_,
-                              warning = function(w) NA_character_),
-    country_iso    = COUNTRY_ISO,
+    atnet_version  = atnet_version,
     country_name   = country_name,
     start_year     = start_year,
     hist_last      = hist_last,
@@ -780,18 +941,11 @@ saveRDS(list(
     peak_day       = peak_day,
     campaign_months_before_peak = campaign_months_before_peak,
     campaign_month = campaign_month,
-    future_campaign_days = future_campaign_days,
-    human_pop      = human_pop,
-    retention_time = retention_time,
-    campaign_cov   = campaign_cov,
-    cd_floor_frac  = cd_floor_frac,
     cd_floor       = cd_floor,
     cd_cov         = cd_cov,
-    hl_fixed_years = hl_fixed_years,   # NULL = each row's drawn half-life
-    hl_tag         = hl_tag,
-    arms           = arms
-  )
-), OUT_FILE)
-message("Saved -> ", OUT_FILE)
+    hl_tag         = hl_tag
+  ))
+), SWEEP_FILE)
+message("Saved -> ", SWEEP_FILE)
 
 } # end if (!country_test_mode)

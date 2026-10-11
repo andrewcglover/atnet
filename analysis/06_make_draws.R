@@ -11,9 +11,9 @@
 #       one whole iteration of the TRA fit (tra.rds), chosen independently of
 #       the EIP iteration; on the laboratory scale, since malariasimulation
 #       maps them to the field scale itself (use_bompard = TRUE)
-#   omega_atn, p_atn_u, p_atn_atn, p_atn_aitn, half_life_years
-#       one value from each prior in projection_priors(); p_atn_atn and
-#       p_atn_aitn are the same quantile p_atn_u of the ATN and AITN priors
+#   omega_atn, p_a_quantile, p_a_atn, p_a_aitn, half_life_atn_years
+#       one value from each prior in projection_priors(); p_a_atn and
+#       p_a_aitn are the same quantile p_a_quantile of the ATN and AITN priors
 #
 # Insecticide-treated net column:
 #   itn_draw
@@ -85,13 +85,14 @@ q <- c(0.025, 0.5, 0.975)
 prior_tab <- rbind(
   omega_atn = c(summ(draws$omega_atn),
                 stats::qbeta(q, pr$omega_atn$shape1, pr$omega_atn$shape2)),
-  p_atn_atn = c(summ(draws$p_atn_atn),
-                stats::qbeta(q, pr$p_atn$atn$shape1, pr$p_atn$atn$shape2)),
-  p_atn_aitn = c(summ(draws$p_atn_aitn),
-                 stats::qbeta(q, pr$p_atn$aitn$shape1, pr$p_atn$aitn$shape2)),
-  half_life_years = c(summ(draws$half_life_years),
-                      stats::qgamma(q, shape = pr$half_life_years$shape,
-                                    scale = pr$half_life_years$scale))
+  p_a_atn = c(summ(draws$p_a_atn),
+              stats::qbeta(q, pr$p_a$atn$shape1, pr$p_a$atn$shape2)),
+  p_a_aitn = c(summ(draws$p_a_aitn),
+               stats::qbeta(q, pr$p_a$aitn$shape1, pr$p_a$aitn$shape2)),
+  half_life_atn_years = c(summ(draws$half_life_atn_years),
+                          stats::qgamma(q,
+                                        shape = pr$half_life_atn_years$shape,
+                                        scale = pr$half_life_atn_years$scale))
 )
 colnames(prior_tab) <- c("table 2.5%", "table 50%", "table 97.5%",
                          "prior 2.5%", "prior 50%", "prior 97.5%")

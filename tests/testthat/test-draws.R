@@ -15,12 +15,12 @@ test_that("the projection priors give the summaries in the SI priors table", {
   q <- c(0.025, 0.5, 0.975)
   expect_equal(round(qbeta(q, pr$omega_atn$shape1, pr$omega_atn$shape2), 2),
                c(0.80, 0.91, 0.97))
-  expect_equal(round(qbeta(q, pr$p_atn$atn$shape1, pr$p_atn$atn$shape2), 3),
+  expect_equal(round(qbeta(q, pr$p_a$atn$shape1, pr$p_a$atn$shape2), 3),
                c(0.800, 0.950, 0.996))
-  expect_equal(round(qbeta(q, pr$p_atn$aitn$shape1, pr$p_atn$aitn$shape2), 2),
+  expect_equal(round(qbeta(q, pr$p_a$aitn$shape1, pr$p_a$aitn$shape2), 2),
                c(0.70, 0.90, 0.99))
-  expect_equal(round(qgamma(q, shape = pr$half_life_years$shape,
-                            scale = pr$half_life_years$scale), 2),
+  expect_equal(round(qgamma(q, shape = pr$half_life_atn_years$shape,
+                            scale = pr$half_life_atn_years$scale), 2),
                c(1.00, 2.50, 5.04))
 })
 
@@ -44,10 +44,10 @@ test_that("each row keeps whole iterations, sampled without replacement", {
 
 test_that("the ATN and AITN values of p_A are the same quantile", {
   d <- withr::with_seed(2, draw_antimalarial_inputs(eip_fake, tra_fake, 100))
-  pr <- projection_priors()$p_atn
-  expect_equal(pbeta(d$p_atn_atn, pr$atn$shape1, pr$atn$shape2), d$p_atn_u)
-  expect_equal(pbeta(d$p_atn_aitn, pr$aitn$shape1, pr$aitn$shape2), d$p_atn_u)
-  expect_true(all(d$p_atn_aitn < d$p_atn_atn))
+  pr <- projection_priors()$p_a
+  expect_equal(pbeta(d$p_a_atn, pr$atn$shape1, pr$atn$shape2), d$p_a_quantile)
+  expect_equal(pbeta(d$p_a_aitn, pr$aitn$shape1, pr$aitn$shape2), d$p_a_quantile)
+  expect_true(all(d$p_a_aitn < d$p_a_atn))
 })
 
 test_that("the same seed gives the same table", {

@@ -9,8 +9,8 @@
 #' * one whole iteration of the TRA fit, chosen independently of the EIP
 #'   iteration: `s_half_pre`, `nH_pre`, `B_max_post` (the fit's `b_max`),
 #'   `s_half_post` and `nH_post`, on the laboratory scale;
-#' * one value from each prior in [projection_priors()]. `p_atn_atn` and
-#'   `p_atn_aitn` are the same quantile, `p_atn_u`, of the ATN and the AITN
+#' * one value from each prior in [projection_priors()]. `p_a_atn` and
+#'   `p_a_aitn` are the same quantile, `p_a_quantile`, of the ATN and the AITN
 #'   prior, so a draw with low uptake for an ATN is equally low for an AITN.
 #'
 #' Iterations are sampled without replacement, and `eip_chain`, `eip_iter`,
@@ -58,18 +58,20 @@ draw_antimalarial_inputs <- function(eip_draws, tra_draws, n,
   names(eip)[1:2] <- c("eip_chain", "eip_iter")
   names(tra)[1:2] <- c("tra_chain", "tra_iter")
 
-  p <- priors$p_atn
-  p_atn_u <- stats::runif(n)
+  p <- priors$p_a
+  p_a_quantile <- stats::runif(n)
   data.frame(
     draw = seq_len(n),
     eip,
     tra,
     omega_atn = stats::rbeta(n, priors$omega_atn$shape1,
                              priors$omega_atn$shape2),
-    p_atn_u = p_atn_u,
-    p_atn_atn = stats::qbeta(p_atn_u, p$atn$shape1, p$atn$shape2),
-    p_atn_aitn = stats::qbeta(p_atn_u, p$aitn$shape1, p$aitn$shape2),
-    half_life_years = stats::rgamma(n, shape = priors$half_life_years$shape,
-                                    scale = priors$half_life_years$scale)
+    p_a_quantile = p_a_quantile,
+    p_a_atn = stats::qbeta(p_a_quantile, p$atn$shape1, p$atn$shape2),
+    p_a_aitn = stats::qbeta(p_a_quantile, p$aitn$shape1, p$aitn$shape2),
+    half_life_atn_years = stats::rgamma(
+      n, shape = priors$half_life_atn_years$shape,
+      scale = priors$half_life_atn_years$scale
+    )
   )
 }

@@ -27,8 +27,8 @@ assumption, so its parameters stay together: \code{s_half_eip}, \code{nH_eip} an
 \item one whole iteration of the TRA fit, chosen independently of the EIP
 iteration: \code{s_half_pre}, \code{nH_pre}, \code{B_max_post} (the fit's \code{b_max}),
 \code{s_half_post} and \code{nH_post}, on the laboratory scale;
-\item one value from each prior in \code{\link[=projection_priors]{projection_priors()}}. \code{p_atn_atn} and
-\code{p_atn_aitn} are the same quantile, \code{p_atn_u}, of the ATN and the AITN
+\item one value from each prior in \code{\link[=projection_priors]{projection_priors()}}. \code{p_a_atn} and
+\code{p_a_aitn} are the same quantile, \code{p_a_quantile}, of the ATN and the AITN
 prior, so a draw with low uptake for an ATN is equally low for an AITN.
 }
 }

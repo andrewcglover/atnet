@@ -171,8 +171,15 @@ sweep_arms_env <- Sys.getenv("SWEEP_ARMS", "")
 if (nzchar(sweep_arms_env)) {
   arms <- trimws(strsplit(sweep_arms_env, ",")[[1]])
 }
-# NET_RETENTION_DAYS: override the site mean_retention (days). Empty = use site value.
-# Used for the retention sensitivity (site value treated as a half-life -> scale by log(2)).
+# Net retention: the mean duration of ITN use in Mali, 1.8 years (national median of Glover et
+# al., eLife 2025, 14:RP108745, Figure 5A). That estimate already allows for nets being given at
+# random, including to people who still hold one (its Eq. 6), which is how malariasimulation
+# distributes them, so it is entered as it stands. One national value, and no urban/rural split,
+# by design. It replaces the site file's mean_retention (about 2014 days) for every net, including
+# 2000-2024, whose distributions were fitted with the site value, so the history needs
+# recalibrating before the large run.
+retention_years <- 1.8
+# NET_RETENTION_DAYS: override the retention (days). Empty = retention_years.
 ret_env            <- Sys.getenv("NET_RETENTION_DAYS", "")
 retention_override <- if (nzchar(ret_env)) as.numeric(ret_env) else NULL
 deltaq_use     <- 10L
@@ -198,21 +205,24 @@ message(sprintf("Antimalarial half-life: %s | arms: %s",
                 paste(arms, collapse = ",")))
 message(sprintf("OUT_FILE: %s", OUT_FILE))
 
-site_retention <- unique(site_obj$interventions$mean_retention)
-stopifnot(length(site_retention) == 1L)
-retention_time <- if (!is.null(retention_override)) retention_override else site_retention
+retention_time <- if (!is.null(retention_override)) retention_override else retention_years * 365
 message(sprintf("Net retention = %.1f days (%s)", retention_time,
-                if (is.null(retention_override)) "site mean_retention" else "manual override"))
+                if (is.null(retention_override)) sprintf("%g years", retention_years) else "manual override"))
 
 # ---------------------------------------------------------------------
 # 1. CD coverage math
+#    Mass campaigns reach campaign_cov of the population. Continuous
+#    distribution (CD) maintains a floor of use equal to cd_floor_frac of the
+#    post-campaign use (Mali-specific, Glover et al. 2025). The monthly top-up
+#    coverage is the one that holds use at that floor when nets are given at
+#    random and lost at the retention rate.
 # ---------------------------------------------------------------------
-campaign_cov <- 0.9
-CD_frac      <- 0.155
-cd_interval  <- 365 / 12
+campaign_cov  <- 0.95
+cd_floor_frac <- 0.3
+cd_interval   <- 365 / 12
 
 d_cd     <- exp(-cd_interval / retention_time)
-cd_floor <- CD_frac * campaign_cov / (1 - CD_frac * (1 - campaign_cov))
+cd_floor <- cd_floor_frac * campaign_cov
 cd_cov   <- cd_floor * (1 - d_cd) / (1 - cd_floor * d_cd)
 message(sprintf("CD: campaign_cov=%.2f -> floor=%.4f, monthly_top-up_cov=%.4f",
                 campaign_cov, cd_floor, cd_cov))
@@ -520,6 +530,10 @@ build_params <- function(region, arm, draw) {
     rnm       = matrix(rep(rnm, n_sp), ncol = n_sp),
     gamman    = gam
   )
+  # site_parameters() has already called set_bednets() with the site file's own
+  # retention, and the fork sets the ATN coverage loss rate from the first such
+  # call only, so set it here from the retention the nets now use.
+  p$lambda_atn <- 1 / retention_time
 
   p
 }
@@ -637,6 +651,8 @@ saveRDS(list(
     future_campaign_days = future_campaign_days,
     human_pop      = human_pop,
     retention_time = retention_time,
+    campaign_cov   = campaign_cov,
+    cd_floor_frac  = cd_floor_frac,
     cd_floor       = cd_floor,
     cd_cov         = cd_cov,
     hl_fixed_years = hl_fixed_years,   # NULL = each row's drawn half-life

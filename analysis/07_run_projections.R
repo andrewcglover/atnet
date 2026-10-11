@@ -19,17 +19,27 @@
 #   An eighth arm, pyr_cfp_mc_atn_cd (Pyr-CFP campaigns, ATN continuous
 #   distribution), is not in the paper but can still be run via SWEEP_ARMS.
 #
+#   Each simulation runs in three segments, resuming from the saved state:
+#     1. 2000-2021, ONE run per region shared by every row (seed SEED_BASE),
+#        with the site file's net efficacy. Saved under HISTORY_DIR and reused
+#        by later batches of rows, so all rows share the same history.
+#     2. 2022-2024, one run per region and row i (seed SEED_BASE + i): nets
+#        distributed in these years take the efficacy of ITN draw i for the
+#        site's net type, at that year's resistance. Nets handed out earlier
+#        keep the site values while still in use.
+#     3. 2025-2031, every arm resumes from row i's end-2024 state (30 December,
+#        the day before the first future distribution), with its random-number
+#        state restored, so the arms of a row are compared on the same random
+#        numbers.
+#   Every segment and arm uses deltaq = deltaq_use, so the saved states fit.
 #   Simulation i of every region and arm uses row i of the draws table:
 #     - the EIP and blocking kernel parameters, omega_atn and the antimalarial
 #       half-life (ATN arms only);
 #     - p_A: p_a_atn for the ATN arm, p_a_aitn for Pyr-ATN and Pyr-CFP-ATN;
 #     - itn_draw: the draw of the Churcher et al. (2024) net parameters
-#       (read_itn_draws()) used for every future insecticidal net, at each
-#       year's projected pyrethroid resistance in the region;
-#     - the random-number seed, SEED_BASE + i, the same for every region and
-#       arm.
-#   Arms without an antimalarial use only itn_draw and the seed. Nets before
-#   the projection window keep the site file's efficacy.
+#       (read_itn_draws()) used for the nets distributed from 2022, at each
+#       year's pyrethroid resistance in the region.
+#   Arms without an antimalarial use only itn_draw and the seed.
 #
 #   Settings (environment variables):
 #     DRAW_ROWS         rows of the draws table to run, e.g. 1-100 (required)
@@ -74,6 +84,15 @@ if (nzchar(FORK_PATH)) {
 if (!"omega_atn" %in% names(malariasimulation::get_parameters())) {
   stop("The loaded malariasimulation is not the ATN fork. Set ATN_FORK_PATH to the fork's ",
        "folder, or install the fork.", call. = FALSE)
+}
+# Which fork produced the results: the tag or commit of the source folder, or the
+# installed package's version and GitHub reference.
+fork_version <- if (nzchar(FORK_PATH)) {
+  tryCatch(system(sprintf('git -C "%s" describe --tags --always --dirty', FORK_PATH), intern = TRUE),
+           error = function(e) NA_character_, warning = function(w) NA_character_)
+} else {
+  d <- utils::packageDescription("malariasimulation")
+  paste(c(d$Version, d$RemoteRef, d$RemoteSha), collapse = " ")
 }
 library(site)
 library(dplyr); library(tidyr)
@@ -121,9 +140,18 @@ if (length(draw_bounds) != 2L || anyNA(draw_bounds) || draw_bounds[1] < 1L ||
 }
 draw_rows <- seq.int(draw_bounds[1], draw_bounds[2])
 
-# The random-number seed of simulation i is SEED_BASE + i, the same for every
-# region and arm, so the arms of one row are compared on the same random numbers.
+# Random numbers: the shared 2000-2021 history of each region uses seed SEED_BASE;
+# from 2022 simulation i uses seed SEED_BASE + i, the same for every region, and
+# its arms all continue from the same random-number state.
 SEED_BASE <- 20261011L
+
+# First year in which nets take the row's ITN draw, and so the first year that
+# differs between rows; the history segment runs up to the end of the year before.
+branch_year <- 2022L
+# Saved 2000-2021 histories, one file per region, reused by every later batch of
+# rows (and by the fixed half-life runs). A history is reused only if its
+# parameters are identical to the ones this run would build.
+HISTORY_DIR <- file.path("outputs", "projections", "history")
 
 # ANTIMAL_HL_YEARS: fix the antimalarial half-life (years) in every row, for the
 # sensitivity runs at 1, 2.5 and 5 years; everything else still comes from the
@@ -239,6 +267,9 @@ itn_draws <- read_itn_draws()
 # only by the antimalarial.
 net_of_arm <- c(pyr = "only", pyr_atn = "only", pyr_pbo = "pbo",
                 pyr_cfp = "cfp", pyr_cfp_atn = "cfp")
+# The draws for the net type the site file records for each distribution year.
+net_of_site_type <- c(pyrethroid_only = "only", pyrethroid_pbo = "pbo",
+                      pyrethroid_pyrrole = "cfp")
 
 # dn0, rn0 and gamman (days) of draw k of a net type at each resistance in res,
 # each taken at the nearest resistance level.
@@ -310,6 +341,13 @@ future_yr0 <- hist_last + 1L
 n_years    <- (hist_last - start_year + 1L) + n_future_years
 n_steps    <- n_years * 365L
 future_start_day <- (future_yr0 - start_year) * 365L
+# Last day of the shared history segment (31 December of branch_year - 1).
+history_end_day  <- (branch_year - start_year) * 365L
+# Last day of the per-row segment: the day before the first future
+# distribution, which is on future_start_day (31 December 2024, the January
+# slot of the distribution grid), so every arm's own nets fall in its segment.
+pre_end_day      <- future_start_day - 1L
+stopifnot(branch_year > start_year, branch_year <= future_yr0, history_end_day < pre_end_day)
 
 # Mass campaign dates. Peak rainfall is found for each region from the site's
 # seasonality with malariasimulation's own peak_season_offset() (day of a
@@ -346,10 +384,15 @@ message(sprintf("Peak rainfall: day %g-%g by region, national median day %g (%s)
 # ---------------------------------------------------------------------
 # 6. Net schedule builders
 # ---------------------------------------------------------------------
-build_past_schedule <- function(idf) {
+# The site file's net distributions up to the projection window. With a row's
+# inputs (inp), the nets distributed from branch_year take the efficacy of the
+# row's ITN draw for the site's net type, at that year's resistance in the region
+# (from the same resistance table as the future nets); earlier nets, and all nets
+# when inp is NULL (the shared history), keep the site file's values.
+build_past_schedule <- function(idf, region, inp = NULL) {
   pd <- idf[!is.na(idf$itn_input_dist) & idf$itn_input_dist > 0, ]
   if (nrow(pd) == 0L) return(NULL)
-  list(
+  sch <- list(
     timesteps = (pd$year - start_year) * 365L + pd$itn_distribution_day,
     coverages = pd$itn_input_dist,
     dn0 = pd$dn0,
@@ -357,12 +400,24 @@ build_past_schedule <- function(idf) {
     rnm = pd$rnm,
     gam = pd$gamman * 365
   )
+  drawn <- which(pd$year >= branch_year)
+  if (!is.null(inp) && length(drawn)) {
+    rtab <- site_obj$vectors$pyrethroid_resistance
+    rtab <- rtab[rtab$name_1 == region, ]
+    for (k in drawn) {
+      net <- net_of_site_type[[pd$net_type[k]]]
+      res <- rtab$pyrethroid_resistance[match(pd$year[k], rtab$year)]
+      d   <- net_draw(net, inp$itn_draw, res)
+      sch$dn0[k] <- d$dn0; sch$rn[k] <- d$rn0; sch$gam[k] <- d$gamman
+    }
+  }
+  sch
 }
 
 # inp: the row's inputs, from row_inputs(); its ITN draw sets the efficacy of the
 # insecticidal nets, and its antimalarial half-life the decay of an ATN's netting.
 build_future_schedule <- function(arm, region, inp) {
-  if (arm == "none") return(NULL)
+  if (arm %in% c("none", "history")) return(NULL)
 
   grid    <- unique(round(seq(future_start_day, n_steps, by = cd_interval)))
   is_camp <- vapply(grid, function(t) any(abs(t - future_campaign_days) < 1L), logical(1))
@@ -418,10 +473,12 @@ build_future_schedule <- function(arm, region, inp) {
 
 # ---------------------------------------------------------------------
 # 7. Build parameters for one region x arm x row of the draws table
+#    arm = "history" builds the shared 2000-2021 segment: site net efficacy
+#    throughout, no future nets, ATN off, and no row (draw = NULL).
 # ---------------------------------------------------------------------
 build_params <- function(region, arm, draw) {
 
-  inp <- row_inputs(draw)
+  inp <- if (arm == "history") NULL else row_inputs(draw)
 
   site_row <- site_obj$sites[site_obj$sites$name_1 == region, , drop = FALSE]
   ms       <- site::subset_site(site_obj, site_row)
@@ -467,7 +524,6 @@ build_params <- function(region, arm, draw) {
   if (arm %in% c("atn", "pyr_atn", "pyr_cfp_atn")) {
     atn_overrides <- c(list(
       p_atn         = inp$p_a[[p_a_of_arm[[arm]]]],
-      deltaq        = deltaq_use,
       gamma_atn     = log(2) / inp$hl_days,
       omega_atn     = inp$omega_atn,
       Q0_atn        = fsch$coverages,
@@ -486,7 +542,6 @@ build_params <- function(region, arm, draw) {
     mc_Q0  <- fsch$coverages[mc_rows]
     atn_overrides <- c(list(
       p_atn             = inp$p_a[[p_a_of_arm[[arm]]]],
-      deltaq            = deltaq_use,
       gamma_atn         = log(2) / inp$hl_days,
       omega_atn         = inp$omega_atn,
       t0_atn            = cd_t0,
@@ -503,11 +558,14 @@ build_params <- function(region, arm, draw) {
     vectors       = ms_ext$vectors$vector_species,
     seasonality   = ms_ext$seasonality$seasonality_parameters,
     eir           = ms$eir$eir,
-    overrides     = c(render_overrides, form_overrides, atn_overrides,
-                      list(ode_max_steps = 1e8, a_tol = 0.1))
+    # deltaq is the same in every segment and arm (ATN or not), so that a saved
+    # state can be resumed by any arm; without an antimalarial the extra
+    # exposure classes stay empty.
+    overrides     = c(render_overrides, form_overrides, list(deltaq = deltaq_use),
+                      atn_overrides, list(ode_max_steps = 1e8, a_tol = 0.1))
   )
 
-  past <- build_past_schedule(ms$interventions)
+  past <- build_past_schedule(ms$interventions, region, inp)
 
   ts  <- c(past$timesteps,  fsch$timesteps)
   cov <- c(past$coverages,  fsch$coverages)
@@ -539,33 +597,86 @@ build_params <- function(region, arm, draw) {
 }
 
 # ---------------------------------------------------------------------
-# 8. Run one region x arm x draw
-#    Keeps ALL run_simulation columns (incl. Sv/Ev/Iv_*_count, EIR_<species>).
-#    The seed is set immediately before the simulation; run_simulation() seeds
-#    the model's own C++ generator from R's, so this fixes every random draw.
+# 8. The three segments
+#    Each keeps ALL rendered columns (incl. Sv/Ev/Iv_*_count, EIR_<species>).
+#    A seed is set immediately before each segment that does not restore the
+#    saved random-number state; run_resumable_simulation() seeds the model's
+#    own C++ generator from R's, so this fixes every random draw. Resuming was
+#    checked to reproduce an uninterrupted run exactly (7a.1, 2026-10-11).
 # ---------------------------------------------------------------------
-run_one <- function(row) {
-  region <- row$region; arm <- row$arm; draw <- row$draw
+annotate <- function(d, region, arm, draw, seed) {
+  as.data.frame(d) |>
+    mutate(
+      region    = region,
+      arm       = arm,
+      draw      = draw,
+      seed      = seed,
+      year_rel  = (timestep - future_start_day) / 365,
+      pfpr2to10 = n_detect_lm_730_3649 / n_age_730_3649,
+      clin_inc  = n_inc_clinical_0_1824 + n_inc_clinical_1825_5474 + n_inc_clinical_5475_36499,
+      EIR_total_pp = rowSums(across(starts_with("EIR_"))) / human_pop
+    )
+}
+
+history_file <- function(region) {
+  tag <- gsub("[^A-Za-z0-9]", "", iconv(region, to = "ASCII//TRANSLIT"))
+  file.path(HISTORY_DIR, sprintf("%s_%s_pop%d_ret%d.rds", tolower(COUNTRY_ISO), tag,
+                                 human_pop, round(retention_time)))
+}
+
+# Segment 1: the region's 2000-2021 history, run once and saved. An existing
+# file is reused only if it was built from identical parameters and seed.
+run_history <- function(region) {
+  f <- history_file(region)
+  p <- build_params(region, "history", NULL)
+  if (file.exists(f)) {
+    h <- readRDS(f)
+    if (!identical(h$parameters, p) || !identical(h$seed, SEED_BASE) ||
+        !identical(h$end_day, history_end_day)) {
+      stop(f, " was made with different inputs. Move it to rebuild the history.", call. = FALSE)
+    }
+    return(list(region = region, file = f, reused = TRUE))
+  }
+  # As in malariasimulation's own resume tests: build the correlations once,
+  # here, and let the later segments restore them from the saved state.
+  correlations <- get_correlation_parameters(p)
+  invisible(correlations$mvnorm())
+  set.seed(SEED_BASE)
+  r <- run_resumable_simulation(history_end_day, parameters = p, correlations = correlations)
+  dir.create(dirname(f), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(list(region = region, parameters = p, seed = SEED_BASE, end_day = history_end_day,
+               fork_version = fork_version, state = r$state,
+               data = annotate(r$data, region, "history", NA_integer_, SEED_BASE)), f)
+  list(region = region, file = f, reused = FALSE)
+}
+
+# Segments 2 and 3 for one region and row: 2022-2024 with the row's seed and
+# ITN draw, then every arm resumed from that end-2024 state with its
+# random-number state restored. end_day can stop the arms early (for tests and
+# timing); the net schedules are unchanged.
+run_row <- function(job, end_day = n_steps) {
+  region <- job$region; draw <- job$draw
   seed <- SEED_BASE + draw
-  tryCatch({
-    p <- build_params(region, arm, draw)
+  fail <- function(arm, e) data.frame(region = region, arm = arm, draw = draw,
+                                      message = conditionMessage(e), stringsAsFactors = FALSE)
+  pre <- tryCatch({
+    h <- readRDS(history_file(region))
+    p_pre <- build_params(region, "none", draw)
     set.seed(seed)
-    r <- run_simulation(timesteps = n_steps, parameters = p)
-    as.data.frame(r) |>
-      mutate(
-        region    = region,
-        arm       = arm,
-        draw      = draw,
-        seed      = seed,
-        year_rel  = (timestep - future_start_day) / 365,
-        pfpr2to10 = n_detect_lm_730_3649 / n_age_730_3649,
-        clin_inc  = n_inc_clinical_0_1824 + n_inc_clinical_1825_5474 + n_inc_clinical_5475_36499,
-        EIR_total_pp = rowSums(across(starts_with("EIR_"))) / human_pop
-      )
-  }, error = function(e) {
-    list(.__error__ = TRUE, region = region, arm = arm, draw = draw,
-         message = conditionMessage(e))
-  })
+    run_resumable_simulation(pre_end_day, parameters = p_pre,
+                             initial_state = h$state, restore_random_state = FALSE)
+  }, error = function(e) fail("2022-2024", e))
+  if (is.data.frame(pre)) return(list(failures = pre))
+  out <- lapply(arms, function(arm) tryCatch({
+    p <- build_params(region, arm, draw)
+    r <- run_resumable_simulation(end_day, parameters = p,
+                                  initial_state = pre$state, restore_random_state = TRUE)
+    annotate(r$data, region, arm, draw, seed)
+  }, error = function(e) fail(arm, e)))
+  failed <- vapply(out, function(x) "message" %in% names(x), logical(1))
+  list(pre_projection = annotate(pre$data, region, "2022-2024", draw, seed),
+       results = dplyr::bind_rows(out[!failed]),
+       failures = dplyr::bind_rows(out[failed]))
 }
 
 # ---------------------------------------------------------------------
@@ -576,9 +687,8 @@ if (isTRUE(getOption("country_test_mode"))) {
   message("country_test_mode = TRUE: setup complete, skipping parallel sweep.")
 } else {
 
-grid_df <- expand.grid(region = regions, arm = arms, draw = draw_rows,
-                       stringsAsFactors = FALSE)
-rows    <- split(grid_df, seq_len(nrow(grid_df)))
+jobs <- expand.grid(region = regions, draw = draw_rows, stringsAsFactors = FALSE)
+jobs <- lapply(seq_len(nrow(jobs)), function(k) as.list(jobs[k, ]))
 
 cl <- parallel::makeCluster(N_CORES, setup_strategy = "sequential", outfile = "")
 on.exit(parallel::stopCluster(cl), add = TRUE)
@@ -597,38 +707,60 @@ parallel::clusterEvalQ(cl, {
 })
 parallel::clusterExport(cl, c(
   "build_params", "build_past_schedule", "build_future_schedule", "net_draw",
-  "row_inputs", "run_one",
-  "site_obj", "regions", "start_year", "hist_last", "future_yr0",
-  "future_start_day", "future_campaign_days", "n_steps", "n_future_years",
-  "draws_tab", "itn_draws", "net_of_arm", "p_a_of_arm", "hl_fixed_years", "SEED_BASE",
+  "row_inputs", "annotate", "history_file", "run_history", "run_row",
+  "site_obj", "regions", "arms", "start_year", "hist_last", "future_yr0",
+  "future_start_day", "history_end_day", "pre_end_day", "branch_year", "future_campaign_days",
+  "n_steps", "n_future_years", "draws_tab", "itn_draws", "net_of_arm",
+  "net_of_site_type", "p_a_of_arm", "hl_fixed_years", "SEED_BASE",
   "cd_cov", "campaign_cov", "cd_interval", "retention_time", "deltaq_use",
-  "render_overrides", "form_overrides", "human_pop",
-  "future_interventions"
+  "render_overrides", "form_overrides", "human_pop", "future_interventions",
+  "COUNTRY_ISO", "HISTORY_DIR", "fork_version"
 ))
 
+# Segment 1: the shared histories, one job per region (reused when saved).
 t0 <- proc.time()[["elapsed"]]
-res_list <- parallel::parLapplyLB(cl, rows, run_one)
-message(sprintf("Done %d runs in %.0f s", length(rows),
+hist_res <- parallel::parLapplyLB(cl, regions, function(r)
+  tryCatch(run_history(r), error = function(e) list(region = r, error = conditionMessage(e))))
+hist_err <- vapply(hist_res, function(x) !is.null(x$error), logical(1))
+if (any(hist_err)) {
+  stop("History failed for: ", paste(vapply(hist_res[hist_err], function(x)
+    paste0(x$region, " (", x$error, ")"), character(1)), collapse = "; "), call. = FALSE)
+}
+message(sprintf("Histories: %d built, %d reused, %.0f s",
+                sum(!vapply(hist_res, `[[`, logical(1), "reused")),
+                sum(vapply(hist_res, `[[`, logical(1), "reused")),
                 proc.time()[["elapsed"]] - t0))
 
-is_error <- vapply(res_list, function(x) isTRUE(x$.__error__), logical(1))
-if (any(is_error)) {
-  failures <- dplyr::bind_rows(lapply(res_list[is_error], function(x)
-    data.frame(region = x$region, arm = x$arm, draw = x$draw, message = x$message,
-               stringsAsFactors = FALSE)))
-  message(sprintf("WARNING: %d job(s) failed and excluded from output:", sum(is_error)))
+# Segments 2 and 3: one job per region and row, its arms run inside the job.
+t0 <- proc.time()[["elapsed"]]
+res_list <- parallel::parLapplyLB(cl, jobs, run_row)
+message(sprintf("Done %d region x row jobs (%d arms each) in %.0f s", length(jobs),
+                length(arms), proc.time()[["elapsed"]] - t0))
+
+failures <- dplyr::bind_rows(lapply(res_list, `[[`, "failures"))
+if (nrow(failures)) {
+  message(sprintf("WARNING: %d segment(s) failed and excluded from output:", nrow(failures)))
   print(failures)
   write.csv(failures,
             sub("\\.rds$", "_failures.csv", OUT_FILE),
             row.names = FALSE)
 }
-df_full <- dplyr::bind_rows(res_list[!is_error])
 dir.create(dirname(OUT_FILE), recursive = TRUE, showWarnings = FALSE)
 saveRDS(list(
-  results = df_full,
+  history        = dplyr::bind_rows(lapply(regions, function(r) readRDS(history_file(r))$data)),
+  pre_projection = dplyr::bind_rows(lapply(res_list, `[[`, "pre_projection")),
+  results        = dplyr::bind_rows(lapply(res_list, `[[`, "results")),
   shape   = site_obj$shape$level_1,
   meta    = list(
     param_set      = "draws",
+    design         = paste0("history 2000-", branch_year - 1L, " shared per region (seed seed_base); ",
+                            branch_year, "-", future_yr0 - 1L, " per row (seed seed_base + row, ITN draw); ",
+                            future_yr0, " on: arms resumed from the row's state"),
+    branch_year    = branch_year,
+    history_end_day = history_end_day,
+    pre_end_day    = pre_end_day,
+    history_files  = vapply(regions, history_file, character(1)),
+    fork_version   = fork_version,
     draws_file     = DRAWS_FILE,
     draws_md5      = unname(tools::md5sum(DRAWS_FILE)),
     draw_rows      = draw_rows,

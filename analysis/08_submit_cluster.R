@@ -331,7 +331,7 @@ submit_realisations <- function(b, first, last, k = 10L, regions = b$regions, su
 
   # The histories stage must have finished: settings.rds and every history in place.
   missing <- c(if (!file.exists(file.path(b$out_dir, "settings.rds"))) "settings.rds",
-               paste("history of", names(b$history_files)[!file.exists(b$history_files)]))
+               sprintf("history of %s", names(b$history_files)[!file.exists(b$history_files)]))
   if (!submit) {
     if (length(missing)) {
       message("Not yet possible: the histories job has not finished (missing: ",

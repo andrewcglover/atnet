@@ -20,17 +20,17 @@
 #   distribution), is not in the paper but can still be run via SWEEP_ARMS.
 #
 #   Each simulation runs in three segments, resuming from the saved state:
-#     1. 2000-2021, ONE run per region shared by every row (seed SEED_BASE),
-#        with the site file's net efficacy. Saved under HISTORY_DIR and reused
-#        by later batches of rows, so all rows share the same history.
-#     2. 2022-2024, one run per region and row i (seed SEED_BASE + i): nets
-#        distributed in these years take the efficacy of ITN draw i for the
-#        site's net type, at that year's resistance. Nets handed out earlier
-#        keep the site values while still in use.
-#     3. 2025-2031, every arm resumes from row i's end-2024 state (30 December,
-#        the day before the first future distribution), with its random-number
-#        state restored, so the arms of a row are compared on the same random
-#        numbers.
+#     1. 2000-2021, ONE run per region shared by every realisation (seed
+#        SEED_BASE), with the site file's net efficacy. Saved under HISTORY_DIR
+#        and reused by later batches, so all realisations share the same history.
+#     2. 2022-2024, one run per region and realisation i (draws-table row i,
+#        seed SEED_BASE + i): nets distributed in these years take the efficacy
+#        of ITN draw i for the site's net type, at that year's resistance. Nets
+#        handed out earlier keep the site values while still in use.
+#     3. 2025-2031, every arm resumes from realisation i's end-2024 state
+#        (30 December, the day before the first future distribution), with its
+#        random-number state restored, so the arms of a realisation are
+#        compared on the same random numbers.
 #   Every segment and arm uses deltaq = deltaq_use, so the saved states fit.
 #   Simulation i of every region and arm uses row i of the draws table:
 #     - the EIP and blocking kernel parameters, omega_atn and the antimalarial
@@ -43,22 +43,36 @@
 #
 #   Settings (environment variables):
 #     DRAW_ROWS         rows of the draws table to run, e.g. 1-100 (required)
-#     ANTIMAL_HL_YEARS  fix the antimalarial half-life (years) in every row,
-#                       e.g. 1, 2.5 or 5; unset = each row's drawn value
+#     ANTIMAL_HL_YEARS  fix the antimalarial half-life (years) in every
+#                       realisation, e.g. 1, 2.5 or 5; unset = each realisation's
+#                       drawn value
 #     SWEEP_ARMS        comma-separated subset of arms (e.g. the three ATN
 #                       arms for the fixed half-life runs)
 #     SWEEP_REGIONS     comma-separated subset of regions (default all)
 #     STOP_BY           e.g. "2026-10-12 04:00" (local time): no job is started
 #                       that would not finish by then, judged by the slowest job
 #                       already saved; the sweep then ends and saves its summary
-#     SWEEP_CORES, NET_RETENTION_DAYS, OUT_SUFFIX, ATN_FORK_PATH: see below
-#   Results go to the folder outputs/projections/<iso>_hl<tag> (hl tag "drawn",
-#   or the fixed half-life), one file per region and row in jobs/ holding its
-#   2022-2024 segment and every arm, with the columns in keep_columns and each
-#   segment's run time. A job whose file exists is skipped, so a stopped sweep
-#   is restarted by launching it again; nothing is overwritten. Each sweep also
-#   writes sweep_rows<a>-<b>.rds (settings, run times, failures), and the
-#   folder's settings.rds stops a later batch of rows from mixing settings.
+#     STAGE             unset = everything in one go (a local run); on the
+#                       cluster (analysis/08_submit_cluster.R) "histories" writes
+#                       settings.rds and builds the histories, then
+#                       "realisations" runs the jobs, which need both to exist
+#     HUMAN_POP         simulated population (default 100000); smaller for tests
+#     END_DAY           stop the arms on this day instead of the last one (tests)
+#     HISTORY_DIR       folder of the saved histories (tests use their own)
+#     SWEEP_CORES, NET_RETENTION_DAYS, OUT_SUFFIX, ATN_FORK_PATH, ATNET_CODE_DIR,
+#     ATNET_VERSION: see below
+#   A "realisation" is simulation i: row i of the draws table, with seed
+#   SEED_BASE + i. Results go to the folder outputs/projections/<iso>_hl<tag>
+#   (hl tag "drawn", or the fixed half-life), one file per region and
+#   realisation in jobs/ holding its 2022-2024 segment and every arm, with the
+#   columns in keep_columns and each segment's run time. A job whose file
+#   exists is skipped, so a stopped sweep is restarted by launching it again;
+#   nothing is overwritten. A job in which any segment failed is saved in
+#   jobs_failed/ instead, for diagnosis, and is run again by the next launch.
+#   Each sweep also writes sweep_rows<a>-<b>.rds, or sweep_<regions>_rows<a>-<b>.rds
+#   for a subset of regions (settings, run times, failures); a sweep that left jobs
+#   failed or not started is finished by launching it again. The folder's
+#   settings.rds stops a later batch of realisations from mixing settings.
 #
 #   Change COUNTRY_ISO to run any available country. Default: MLI (Mali).
 #
@@ -73,15 +87,21 @@
 #
 #   Run with the working directory at the root of this package. The
 #   malariasimulation fork is loaded from source when ATN_FORK_PATH is set
-#   (on the laptop), and otherwise from the installed library (on the
-#   cluster, where the fork is installed at a fixed tag):
-#       ATN_FORK_PATH=C:/Users/ag4218/Local/GitHub/malariasimulation \
+#   (a local run), and otherwise from the installed library (on the cluster,
+#   where the fork is installed at a fixed tag):
+#       ATN_FORK_PATH=C:/Users/ag4218/Local/github/malariasimulation \
 #         DRAW_ROWS=1-100 Rscript analysis/07_run_projections.R
 #   Either way the run stops unless the loaded malariasimulation is the fork.
+#   On the cluster the code (this script, R/ and inst/) is run from a frozen
+#   copy, ATNET_CODE_DIR, made at submission, so editing the package cannot
+#   change a batch already queued; data_private/ and outputs/ stay at the root.
 # =====================================================================
 
-devtools::load_all(quiet = TRUE)   # atnet: expand_interventions(), read_itn_draws()
+# The package root (data_private/, outputs/) and the code to run, which is the
+# root itself unless ATNET_CODE_DIR names a frozen copy.
 ATNET_PATH <- normalizePath(".")
+CODE_PATH  <- normalizePath(Sys.getenv("ATNET_CODE_DIR", ATNET_PATH), mustWork = TRUE)
+pkgload::load_all(CODE_PATH, quiet = TRUE)   # atnet: expand_interventions(), read_itn_draws()
 FORK_PATH  <- Sys.getenv("ATN_FORK_PATH", "")
 if (nzchar(FORK_PATH)) {
   FORK_PATH <- normalizePath(FORK_PATH)
@@ -102,9 +122,13 @@ fork_version <- if (nzchar(FORK_PATH)) {
   d <- utils::packageDescription("malariasimulation")
   paste(c(d$Version, d$RemoteRef, d$RemoteSha), collapse = " ")
 }
-# And which version of this package ("-dirty" = uncommitted changes).
-atnet_version <- tryCatch(system(sprintf('git -C "%s" describe --always --dirty', ATNET_PATH), intern = TRUE),
-                          error = function(e) NA_character_, warning = function(w) NA_character_)
+# And which version of this package ("-dirty" = uncommitted changes). On the
+# cluster, where git may be missing, the submission passes it in ATNET_VERSION.
+atnet_version <- Sys.getenv("ATNET_VERSION", "")
+if (!nzchar(atnet_version)) {
+  atnet_version <- tryCatch(system(sprintf('git -C "%s" describe --always --dirty', ATNET_PATH), intern = TRUE),
+                            error = function(e) NA_character_, warning = function(w) NA_character_)
+}
 library(site)
 library(dplyr); library(tidyr)
 library(parallel)
@@ -118,7 +142,7 @@ SITE_FILE   <- file.path("data_private", "site_files", sprintf("%s.rds", COUNTRY
 # Settings that no longer exist. Each is refused if set, so that an old command
 # cannot appear to choose something the run then ignores.
 removed_settings <- c(
-  ATN_OMEGA     = "omega_atn is now drawn per row from the draws table",
+  ATN_OMEGA     = "omega_atn is now drawn per realisation, from the draws table",
   ATN_CHEM_DOSE = "chem_dose_atn was replaced by omega_atn on 2026-10-09",
   FIT_STAMP     = "the kernel parameters now come from the draws table, whose fit is pinned in analysis/06_make_draws.R"
 )
@@ -128,15 +152,26 @@ for (v in names(removed_settings)) {
   }
 }
 
-# The draws table: row i holds every uncertain input of simulation i.
-DRAWS_FILE <- file.path("inst", "extdata", "projection_draws.csv")
+# The draws table: row i holds every uncertain input of simulation i (realisation i).
+DRAWS_FILE <- file.path(CODE_PATH, "inst", "extdata", "projection_draws.csv")
 
-# DRAW_ROWS: the rows of the draws table to run, as first-last (e.g. 1-100) or a
-# single row. Required, so a large run cannot start by accident; a setup-only
-# check (country_test_mode) defaults to row 1.
+# STAGE: unset runs the histories and then the realisations in one go. On the
+# cluster the two run as separate submissions: "histories" (one job, writing
+# settings.rds and every region's history) and then "realisations" (many jobs,
+# which require settings.rds and the histories to exist and never write them,
+# so jobs running side by side cannot race to write the same file).
+STAGE <- Sys.getenv("STAGE", "")
+if (!STAGE %in% c("", "histories", "realisations")) {
+  stop("STAGE must be unset, 'histories' or 'realisations', not '", STAGE, "'.", call. = FALSE)
+}
+
+# DRAW_ROWS: the realisations to run, as rows of the draws table, first-last
+# (e.g. 1-100) or a single one. Required, so a large run cannot start by
+# accident; a setup-only check (country_test_mode) and the histories stage, which
+# runs no realisation, default to realisation 1.
 draw_rows_env <- Sys.getenv("DRAW_ROWS", "")
 if (!nzchar(draw_rows_env)) {
-  if (!isTRUE(getOption("country_test_mode"))) {
+  if (!isTRUE(getOption("country_test_mode")) && STAGE != "histories") {
     stop("Set DRAW_ROWS to the rows of the draws table to run, e.g. DRAW_ROWS=1-100.",
          call. = FALSE)
   }
@@ -156,17 +191,20 @@ draw_rows <- seq.int(draw_bounds[1], draw_bounds[2])
 # its arms all continue from the same random-number state.
 SEED_BASE <- 20261011L
 
-# First year in which nets take the row's ITN draw, and so the first year that
-# differs between rows; the history segment runs up to the end of the year before.
+# First year in which nets take the realisation's ITN draw, and so the first year
+# that differs between realisations; the history segment runs up to the end of the
+# year before.
 branch_year <- 2022L
 # Saved 2000-2021 histories, one file per region, reused by every later batch of
-# rows (and by the fixed half-life runs). A history is reused only if its
-# parameters are identical to the ones this run would build.
-HISTORY_DIR <- file.path(ATNET_PATH, "outputs", "projections", "history")
+# realisations (and by the fixed half-life runs). A history is reused only if its
+# parameters are identical to the ones this run would build. HISTORY_DIR
+# overrides the folder, so that tests never share the final runs' histories.
+HISTORY_DIR <- Sys.getenv("HISTORY_DIR", file.path(ATNET_PATH, "outputs", "projections", "history"))
 
-# ANTIMAL_HL_YEARS: fix the antimalarial half-life (years) in every row, for the
-# sensitivity runs at 1, 2.5 and 5 years; everything else still comes from the
-# row. Unset = each row's drawn half-life (half_life_atn_years).
+# ANTIMAL_HL_YEARS: fix the antimalarial half-life (years) in every realisation,
+# for the sensitivity runs at 1, 2.5 and 5 years; everything else still comes from
+# the realisation's row of the draws table. Unset = each realisation's drawn
+# half-life (half_life_atn_years).
 #   Launch as: ANTIMAL_HL_YEARS=5 SWEEP_ARMS=atn,pyr_atn,pyr_cfp_atn DRAW_ROWS=1-100 \
 #                Rscript analysis/07_run_projections.R
 hl_env <- Sys.getenv("ANTIMAL_HL_YEARS", "")
@@ -184,17 +222,23 @@ out_extra_suffix <- Sys.getenv("OUT_SUFFIX", "")
 OUT_DIR    <- file.path(ATNET_PATH, "outputs", "projections",
                         sprintf("%s_hl%s%s", tolower(COUNTRY_ISO), hl_tag, out_extra_suffix))
 JOB_DIR    <- file.path(OUT_DIR, "jobs")
-SWEEP_FILE <- file.path(OUT_DIR, sprintf("sweep_rows%d-%d.rds", draw_bounds[1], draw_bounds[2]))
-if (file.exists(SWEEP_FILE) && !isTRUE(getOption("country_test_mode"))) {
-  stop(SWEEP_FILE, " already exists: these rows are done. Move it, or set OUT_SUFFIX.", call. = FALSE)
-}
+# Jobs in which any segment failed, kept for diagnosis; they are not skipped.
+FAILED_DIR <- file.path(OUT_DIR, "jobs_failed")
 
-# SWEEP_CORES: number of parallel workers. Override via env var for concurrent runs.
+# SWEEP_CORES: number of parallel workers. Override via env var for concurrent
+# runs. Required on the cluster, where it must equal the cores the job was given
+# (the default below would start up to 16 workers whatever the job's share).
 sweep_cores_env <- Sys.getenv("SWEEP_CORES", "")
+if (nzchar(STAGE) && !nzchar(sweep_cores_env)) {
+  stop("Set SWEEP_CORES to the cores the job was given when STAGE is set.", call. = FALSE)
+}
 N_CORES <- if (nchar(sweep_cores_env) > 0L) {
   as.integer(sweep_cores_env)
 } else {
   min(16L, max(1L, parallel::detectCores() - 1L))
+}
+if (is.na(N_CORES) || N_CORES < 1L) {
+  stop("SWEEP_CORES must be a positive whole number, not '", sweep_cores_env, "'.", call. = FALSE)
 }
 
 stop_by_env <- Sys.getenv("STOP_BY", "")
@@ -204,7 +248,12 @@ if (!is.null(stop_by) && (is.na(stop_by) || stop_by <= Sys.time())) {
        call. = FALSE)
 }
 
-human_pop      <- 100000L
+# HUMAN_POP: simulated population. The default is the paper's; tests use fewer.
+# It is part of each history's file name, so tests never reuse a full history.
+human_pop      <- as.integer(Sys.getenv("HUMAN_POP", "100000"))
+if (is.na(human_pop) || human_pop < 1L) {
+  stop("HUMAN_POP must be a positive whole number, not '", Sys.getenv("HUMAN_POP"), "'.", call. = FALSE)
+}
 n_future_years <- 7L      # 2025-2031: campaigns in 2025, 2028 and 2031
 # Columns kept from 2022 on (regular expressions; daily values). The history files
 # keep every column. M_exposed_<species> is the species' ATN-exposed adults
@@ -251,10 +300,10 @@ future_interventions <- list(
 site_obj     <- readRDS(SITE_FILE)
 country_name <- unique(site_obj$country)[1]
 message(sprintf("Country: %s (%s)", country_name, COUNTRY_ISO))
-message(sprintf("Draw rows: %d-%d (%d) | seeds %d-%d | cores: %d", draw_bounds[1], draw_bounds[2],
+message(sprintf("Realisations (draws-table rows): %d-%d (%d) | seeds %d-%d | cores: %d", draw_bounds[1], draw_bounds[2],
                 length(draw_rows), SEED_BASE + draw_bounds[1], SEED_BASE + draw_bounds[2], N_CORES))
 message(sprintf("Antimalarial half-life: %s | arms: %s",
-                if (is.null(hl_fixed_years)) "drawn per row" else sprintf("fixed at %g yr", hl_fixed_years),
+                if (is.null(hl_fixed_years)) "drawn per realisation" else sprintf("fixed at %g yr", hl_fixed_years),
                 paste(arms, collapse = ",")))
 message(sprintf("OUT_DIR: %s", OUT_DIR))
 
@@ -375,6 +424,25 @@ if (nzchar(sweep_regions_env)) {
   sweep_regions <- regions[hit]
 }
 message(sprintf("Regions: %s", paste(sweep_regions, collapse = ", ")))
+
+# The sweep's summary file, named by its realisations and, for a subset of
+# regions, by those regions too, so that the cluster's jobs for the same
+# realisations in different regions do not collide.
+region_tag <- function(region) gsub("[^A-Za-z0-9]", "", iconv(region, to = "ASCII//TRANSLIT"))
+sweep_tag  <- if (setequal(sweep_regions, regions)) "" else
+  paste0(paste(region_tag(sweep_regions), collapse = "-"), "_")
+SWEEP_FILE <- file.path(OUT_DIR, sprintf("sweep_%srows%d-%d.rds", sweep_tag, draw_bounds[1], draw_bounds[2]))
+# A finished sweep is never run again. One that left jobs failed or not started
+# (STOP_BY) is finished by launching it again: its saved jobs are skipped, and its
+# summary is replaced by the new one, which covers every job.
+if (file.exists(SWEEP_FILE) && !isTRUE(getOption("country_test_mode")) && STAGE != "histories") {
+  prev <- readRDS(SWEEP_FILE)
+  if (!NROW(prev$failures) && all(prev$jobs$started | prev$jobs$skipped)) {
+    stop(SWEEP_FILE, " already exists: these realisations are done. Move it, or set OUT_SUFFIX.",
+         call. = FALSE)
+  }
+  message("Finishing the jobs that ", basename(SWEEP_FILE), " records as failed or not started")
+}
 start_year <- min(site_obj$interventions$year)
 hist_last  <- max(site_obj$interventions$year)
 future_yr0 <- hist_last + 1L
@@ -383,11 +451,21 @@ n_steps    <- n_years * 365L
 future_start_day <- (future_yr0 - start_year) * 365L
 # Last day of the shared history segment (31 December of branch_year - 1).
 history_end_day  <- (branch_year - start_year) * 365L
-# Last day of the per-row segment: the day before the first future
+# Last day of the per-realisation segment: the day before the first future
 # distribution, which is on future_start_day (31 December 2024, the January
 # slot of the distribution grid), so every arm's own nets fall in its segment.
 pre_end_day      <- future_start_day - 1L
 stopifnot(branch_year > start_year, branch_year <= future_yr0, history_end_day < pre_end_day)
+
+# END_DAY: stop the arms on this day instead of the last (n_steps), for tests and
+# timing; the net schedules are unchanged.
+end_day_env <- Sys.getenv("END_DAY", "")
+END_DAY <- if (nzchar(end_day_env)) suppressWarnings(as.integer(end_day_env)) else n_steps
+if (is.na(END_DAY) || END_DAY <= pre_end_day || END_DAY > n_steps) {
+  stop(sprintf("END_DAY must be a day from %d to %d, not '%s'.", pre_end_day + 1L, n_steps, end_day_env),
+       call. = FALSE)
+}
+if (END_DAY < n_steps) message(sprintf("END_DAY: arms stop on day %d of %d", END_DAY, n_steps))
 
 # Mass campaign dates. Peak rainfall is found for each region from the site's
 # seasonality with malariasimulation's own peak_season_offset() (day of a
@@ -424,9 +502,9 @@ message(sprintf("Peak rainfall: day %g-%g by region, national median day %g (%s)
 # ---------------------------------------------------------------------
 # 6. Net schedule builders
 # ---------------------------------------------------------------------
-# The site file's net distributions up to the projection window. With a row's
-# inputs (inp), the nets distributed from branch_year take the efficacy of the
-# row's ITN draw for the site's net type, at that year's resistance in the region
+# The site file's net distributions up to the projection window. With a
+# realisation's inputs (inp), the nets distributed from branch_year take the
+# efficacy of its ITN draw for the site's net type, at that year's resistance in the region
 # (from the same resistance table as the future nets); earlier nets, and all nets
 # when inp is NULL (the shared history), keep the site file's values.
 build_past_schedule <- function(idf, region, inp = NULL) {
@@ -454,7 +532,7 @@ build_past_schedule <- function(idf, region, inp = NULL) {
   sch
 }
 
-# inp: the row's inputs, from row_inputs(); its ITN draw sets the efficacy of the
+# inp: the realisation's inputs, from row_inputs(); its ITN draw sets the efficacy of the
 # insecticidal nets, and its antimalarial half-life the decay of an ATN's netting.
 build_future_schedule <- function(arm, region, inp) {
   if (arm %in% c("none", "history")) return(NULL)
@@ -484,23 +562,23 @@ build_future_schedule <- function(arm, region, inp) {
     rnm <- rep(0.24 - 1e-9, n)
     gam <- rep(inp$hl_days, n)
   } else if (arm == "pyr_cfp_mc_atn_cd") {
-    # Mixed-delivery: Pyr-CFP (insecticidal) for mass-campaign rows;
-    # non-insecticidal ATN for CD top-up rows.
+    # Mixed-delivery: Pyr-CFP (insecticidal) for the mass-campaign distributions;
+    # non-insecticidal ATN for the CD top-ups.
     p_mc <- net_draw("cfp", inp$itn_draw, res_grid[is_camp])
     dn0 <- rn <- gam <- numeric(n)
     rnm <- numeric(n)
-    # MC rows: Pyr-CFP efficacy, resistance-projected
+    # Mass campaigns: Pyr-CFP efficacy, resistance-projected
     dn0[is_camp]  <- p_mc$dn0
     rn [is_camp]  <- p_mc$rn0
     rnm[is_camp]  <- 0.24
     gam[is_camp]  <- p_mc$gamman
-    # CD rows: non-insecticidal ATN
+    # CD top-ups: non-insecticidal ATN
     dn0[!is_camp] <- 0
     rn [!is_camp] <- 0.24
     rnm[!is_camp] <- 0.24 - 1e-9
     gam[!is_camp] <- inp$hl_days
   } else {
-    # The row's draw of the arm's net, at each year's projected resistance.
+    # The realisation's draw of the arm's net, at each year's projected resistance.
     p_net <- net_draw(net_of_arm[[arm]], inp$itn_draw, res_grid)
     dn0   <- p_net$dn0
     rn    <- p_net$rn0
@@ -512,9 +590,9 @@ build_future_schedule <- function(arm, region, inp) {
 }
 
 # ---------------------------------------------------------------------
-# 7. Build parameters for one region x arm x row of the draws table
-#    arm = "history" builds the shared 2000-2021 segment: site net efficacy
-#    throughout, no future nets, ATN off, and no row (draw = NULL).
+# 7. Build parameters for one region x arm x realisation (draw = its row of the
+#    draws table). arm = "history" builds the shared 2000-2021 segment: site net
+#    efficacy throughout, no future nets, ATN off, and no realisation (draw = NULL).
 # ---------------------------------------------------------------------
 build_params <- function(region, arm, draw) {
 
@@ -557,7 +635,7 @@ build_params <- function(region, arm, draw) {
 
   fsch <- build_future_schedule(arm, region, inp)
 
-  # ATN construction-time overrides for antimalarial arms, all from the row:
+  # ATN construction-time overrides for antimalarial arms, all from the realisation:
   # p_A by net type, the potency decay rate from the antimalarial half-life,
   # omega_atn and the kernel parameters. Other arms keep the defaults (ATN off).
   atn_overrides <- list()
@@ -571,7 +649,7 @@ build_params <- function(region, arm, draw) {
       n_atn         = length(fsch$timesteps)
     ), inp$kern)
   } else if (arm == "pyr_cfp_mc_atn_cd") {
-    # Mixed-delivery: drug events = CD rows only; MC rows are non-drug displacement
+    # Mixed-delivery: drug events = CD top-ups only; mass campaigns are non-drug displacement
     # events that overwrite ATN holders in the IBM but deliver no antimalarial.
     # atn_displace_t0/Q0 lets compute_atn_kernels collapse Q_atn_t at each campaign.
     cd_rows   <- !fsch$is_camp
@@ -665,15 +743,13 @@ annotate <- function(d, region, arm, draw, seed) {
 
 trim_columns <- function(d) d[grepl(paste(keep_columns, collapse = "|"), names(d))]
 
-region_tag <- function(region) gsub("[^A-Za-z0-9]", "", iconv(region, to = "ASCII//TRANSLIT"))
-
 history_file <- function(region) {
   file.path(HISTORY_DIR, sprintf("%s_%s_pop%d_ret%d.rds", tolower(COUNTRY_ISO), region_tag(region),
                                  human_pop, round(retention_time)))
 }
 
-job_file <- function(job) {
-  file.path(JOB_DIR, sprintf("%s_%s_row%04d.rds", tolower(COUNTRY_ISO), region_tag(job$region), job$draw))
+job_file <- function(job, dir = JOB_DIR) {
+  file.path(dir, sprintf("%s_%s_row%04d.rds", tolower(COUNTRY_ISO), region_tag(job$region), job$draw))
 }
 
 # Written under a temporary name and then renamed, so a run stopped mid-write
@@ -715,10 +791,10 @@ run_history <- function(region) {
   list(region = region, file = f, reused = FALSE, minutes = minutes)
 }
 
-# Segments 2 and 3 for one region and row: 2022-2024 with the row's seed and
-# ITN draw, then every arm resumed from that end-2024 state with its
-# random-number state restored. end_day can stop the arms early (for tests and
-# timing); the net schedules are unchanged.
+# Segments 2 and 3 for one region and realisation (job$draw = draws-table row):
+# 2022-2024 with the realisation's seed and ITN draw, then every arm resumed
+# from that end-2024 state with its random-number state restored. end_day can
+# stop the arms early (for tests and timing); the net schedules are unchanged.
 run_row <- function(job, end_day = n_steps) {
   region <- job$region; draw <- job$draw
   seed <- SEED_BASE + draw
@@ -764,26 +840,30 @@ too_late <- function() {
   Sys.time() + 60 * longest > stop_by
 }
 
-# One job of the sweep: region and row. Skipped if its file exists; otherwise
-# runs the row and saves it, and returns only a summary, so no results are held
-# in memory. Any error is recorded as a failure rather than stopping the sweep.
-run_job <- function(job, end_day = n_steps) {
+# One job of the sweep: a region and a realisation (job$draw = row of the draws
+# table). Skipped if its file exists; otherwise runs the realisation and saves it,
+# and returns only a summary, so no results are held in memory. Any error is
+# recorded as a failure rather than stopping the sweep. A job in which any
+# segment failed is saved in jobs_failed/ instead of jobs/, so the next launch
+# runs it again rather than skipping it.
+run_job <- function(job, end_day = END_DAY) {
   f <- job_file(job)
-  summary <- function(skipped, failures, minutes, started = !skipped) {
-    list(region = job$region, draw = job$draw, file = f, skipped = skipped,
+  summary <- function(skipped, failures, minutes, started = !skipped, file = f) {
+    list(region = job$region, draw = job$draw, file = file, skipped = skipped,
          started = started, failures = failures, minutes = minutes)
   }
   if (file.exists(f)) return(summary(TRUE, NULL, readRDS(f)$minutes))
   if (too_late()) return(summary(FALSE, NULL, NULL, started = FALSE))
   tryCatch({
     x <- run_row(job, end_day)
+    out <- if (NROW(x$failures)) job_file(job, FAILED_DIR) else f
     save_whole(c(list(region = job$region, draw = job$draw, seed = SEED_BASE + job$draw,
                       end_day = end_day, fork_version = fork_version,
                       atnet_version = atnet_version,
-                      history_md5 = unname(tools::md5sum(history_file(job$region)))), x), f)
-    message(sprintf("Job %s row %d: %.0f min, %d failure(s)", job$region, job$draw,
+                      history_md5 = unname(tools::md5sum(history_file(job$region)))), x), out)
+    message(sprintf("Job %s realisation %d: %.0f min, %d failure(s)", job$region, job$draw,
                     sum(x$minutes, na.rm = TRUE), NROW(x$failures)))
-    summary(FALSE, x$failures, x$minutes)
+    summary(FALSE, x$failures, x$minutes, file = out)
   }, error = function(e) {
     summary(FALSE, data.frame(region = job$region, arm = "job", draw = job$draw,
                               message = conditionMessage(e), stringsAsFactors = FALSE), NULL)
@@ -800,7 +880,8 @@ if (isTRUE(getOption("country_test_mode"))) {
 
 
 # The settings that shape every job's results. The first sweep into OUT_DIR
-# records them; a later batch of rows must match, so one folder never mixes runs.
+# records them; a later batch of realisations must match, so one folder never
+# mixes runs. On the cluster only the histories stage writes the file.
 run_settings <- list(
   country_iso      = COUNTRY_ISO,
   fork_version     = fork_version,
@@ -810,13 +891,14 @@ run_settings <- list(
   retention_time   = retention_time,
   campaign_cov     = campaign_cov,
   cd_floor_frac    = cd_floor_frac,
-  hl_fixed_years   = hl_fixed_years,   # NULL = each row's drawn half-life
+  hl_fixed_years   = hl_fixed_years,   # NULL = each realisation's drawn half-life
   arms             = arms,
   n_steps          = n_steps,
   deltaq_use       = deltaq_use,
   seed_base        = SEED_BASE,
   branch_year      = branch_year,
   future_campaign_days = future_campaign_days,
+  end_day          = END_DAY,
   keep_columns     = keep_columns
 )
 settings_file <- file.path(OUT_DIR, "settings.rds")
@@ -825,22 +907,46 @@ if (file.exists(settings_file)) {
     stop(OUT_DIR, " holds runs with other settings (see its settings.rds). ",
          "Move the folder, or set OUT_SUFFIX.", call. = FALSE)
   }
+} else if (STAGE == "realisations") {
+  stop(settings_file, " does not exist: run the histories stage first.", call. = FALSE)
 } else {
   save_whole(run_settings, settings_file)
 }
 
-# Region varies fastest, so whole rows finish first.
-jobs <- expand.grid(region = sweep_regions, draw = draw_rows, stringsAsFactors = FALSE)
-jobs <- lapply(seq_len(nrow(jobs)), function(k) as.list(jobs[k, ]))
-message(sprintf("Jobs: %d (%d already saved, skipped)", length(jobs),
-                sum(vapply(jobs, function(j) file.exists(job_file(j)), logical(1)))))
+# The realisations stage only uses saved histories; building one here could race
+# with another job building the same region's history.
+if (STAGE == "realisations") {
+  no_history <- sweep_regions[!file.exists(vapply(sweep_regions, history_file, character(1)))]
+  if (length(no_history)) {
+    stop("No saved history for ", paste(no_history, collapse = ", "), " in ", HISTORY_DIR,
+         ": run the histories stage first.", call. = FALSE)
+  }
+}
 
-cl <- parallel::makeCluster(N_CORES, setup_strategy = "sequential", outfile = "")
-on.exit(parallel::stopCluster(cl), add = TRUE)
+# One job per region and realisation; region varies fastest, so whole
+# realisations finish first. The histories stage runs no job.
+jobs <- if (STAGE == "histories") list() else {
+  g <- expand.grid(region = sweep_regions, draw = draw_rows, stringsAsFactors = FALSE)
+  lapply(seq_len(nrow(g)), function(k) as.list(g[k, ]))
+}
+if (length(jobs)) {
+  message(sprintf("Jobs: %d (%d already saved, skipped)", length(jobs),
+                  sum(vapply(jobs, function(j) file.exists(job_file(j)), logical(1)))))
+}
+
+# Never more workers than there is work to share between them. The pool is
+# stopped explicitly below (before any error too) rather than by on.exit(), which
+# does not reliably wait at the top level of a script.
+n_workers <- min(N_CORES, max(length(sweep_regions), length(jobs)))
+cl <- parallel::makeCluster(n_workers, setup_strategy = "sequential", outfile = "")
+stop_pool <- function(...) {
+  try(parallel::stopCluster(cl), silent = TRUE)
+  if (length(list(...))) stop(..., call. = FALSE)
+}
 
 # Each worker loads the same malariasimulation as this session, and this package
 # (for expand_interventions()), before the functions and data below are sent to it.
-parallel::clusterExport(cl, c("FORK_PATH", "ATNET_PATH"))
+parallel::clusterExport(cl, c("FORK_PATH", "CODE_PATH"))
 parallel::clusterEvalQ(cl, {
   suppressMessages({ library(site); library(dplyr); library(tidyr) })
   if (nzchar(FORK_PATH)) {
@@ -848,7 +954,7 @@ parallel::clusterEvalQ(cl, {
   } else {
     library(malariasimulation)
   }
-  pkgload::load_all(ATNET_PATH, quiet = TRUE, compile = FALSE)
+  pkgload::load_all(CODE_PATH, quiet = TRUE, compile = FALSE)
 })
 parallel::clusterExport(cl, c(
   "build_params", "build_past_schedule", "build_future_schedule", "net_draw",
@@ -860,22 +966,29 @@ parallel::clusterExport(cl, c(
   "net_of_site_type", "p_a_of_arm", "hl_fixed_years", "SEED_BASE",
   "cd_cov", "campaign_cov", "cd_interval", "retention_time", "deltaq_use",
   "render_overrides", "form_overrides", "human_pop", "future_interventions",
-  "COUNTRY_ISO", "HISTORY_DIR", "JOB_DIR", "keep_columns", "fork_version", "atnet_version"
+  "COUNTRY_ISO", "HISTORY_DIR", "JOB_DIR", "FAILED_DIR", "END_DAY", "keep_columns",
+  "fork_version", "atnet_version"
 ))
 
-# Segment 1: the shared histories, one job per region (reused when saved).
+# Segment 1: the shared histories, one per region (reused when saved; in the
+# realisations stage this only checks that each saved history still matches).
 t0 <- proc.time()[["elapsed"]]
 hist_res <- parallel::parLapplyLB(cl, sweep_regions, function(r)
   tryCatch(run_history(r), error = function(e) list(region = r, error = conditionMessage(e))))
 hist_err <- vapply(hist_res, function(x) !is.null(x$error), logical(1))
 if (any(hist_err)) {
-  stop("History failed for: ", paste(vapply(hist_res[hist_err], function(x)
-    paste0(x$region, " (", x$error, ")"), character(1)), collapse = "; "), call. = FALSE)
+  stop_pool("History failed for: ", paste(vapply(hist_res[hist_err], function(x)
+    paste0(x$region, " (", x$error, ")"), character(1)), collapse = "; "))
 }
 message(sprintf("Histories: %d built, %d reused, %.0f s",
                 sum(!vapply(hist_res, `[[`, logical(1), "reused")),
                 sum(vapply(hist_res, `[[`, logical(1), "reused")),
                 proc.time()[["elapsed"]] - t0))
+
+if (STAGE == "histories") {
+  stop_pool()
+  message("STAGE histories: settings and histories in place.")
+} else {
 
 # A saved job is skipped only if it was run from the history now in place (for
 # example, not from a history since rebuilt after recalibration).
@@ -883,24 +996,30 @@ done <- Filter(function(j) file.exists(job_file(j)), jobs)
 stale <- Filter(function(j) !identical(readRDS(job_file(j))$history_md5,
                                        unname(tools::md5sum(history_file(j$region)))), done)
 if (length(stale)) {
-  stop(length(stale), " saved job(s) were run from a different history, e.g. ", job_file(stale[[1]]),
-       ". Move the results folder, or set OUT_SUFFIX.", call. = FALSE)
+  stop_pool(length(stale), " saved job(s) were run from a different history, e.g. ",
+            job_file(stale[[1]]), ". Move the results folder, or set OUT_SUFFIX.")
 }
 
-# Segments 2 and 3: one job per region and row, its arms run inside the job.
-# Each worker saves its own job file.
+# Segments 2 and 3: one job per region and realisation, its arms run inside the
+# job. Each worker saves its own job file.
 t0 <- proc.time()[["elapsed"]]
 job_res <- parallel::parLapplyLB(cl, jobs, run_job)
-message(sprintf("Done %d region x row jobs (%d arms each) in %.0f s; %d not started (STOP_BY)",
+stop_pool()
+message(sprintf("Done %d region x realisation jobs (%d arms each) in %.0f s; %d not started (STOP_BY)",
                 length(jobs), length(arms), proc.time()[["elapsed"]] - t0,
                 sum(!vapply(job_res, `[[`, logical(1), "started") &
                     !vapply(job_res, `[[`, logical(1), "skipped"))))
 
 failures <- dplyr::bind_rows(lapply(job_res, `[[`, "failures"))
+fail_csv <- sub("\\.rds$", "_failures.csv", SWEEP_FILE)
 if (nrow(failures)) {
-  message(sprintf("WARNING: %d segment(s) failed and are missing from the job files:", nrow(failures)))
+  message(sprintf(paste("WARNING: %d segment(s) failed. Their jobs are saved in %s and will run",
+                        "again at the next launch:"), nrow(failures), FAILED_DIR))
   print(failures)
-  write.csv(failures, sub("\\.rds$", "_failures.csv", SWEEP_FILE), row.names = FALSE)
+  write.csv(failures, fail_csv, row.names = FALSE)
+} else if (file.exists(fail_csv)) {
+  # An earlier launch's failures, now all rerun (its failed job files stay in FAILED_DIR).
+  file.remove(fail_csv)
 }
 # Run time of each segment (minutes), for the timing of larger runs.
 job_minutes <- dplyr::bind_rows(lapply(job_res, function(x) {
@@ -923,8 +1042,9 @@ save_whole(list(
   meta     = c(run_settings, list(
     param_set      = "draws",
     design         = paste0("history 2000-", branch_year - 1L, " shared per region (seed seed_base); ",
-                            branch_year, "-", future_yr0 - 1L, " per row (seed seed_base + row, ITN draw); ",
-                            future_yr0, " on: arms resumed from the row's state"),
+                            branch_year, "-", future_yr0 - 1L, " per realisation i = draws-table row i ",
+                            "(seed seed_base + i, ITN draw); ",
+                            future_yr0, " on: arms resumed from the realisation's state"),
     history_end_day = history_end_day,
     pre_end_day    = pre_end_day,
     history_files  = vapply(sweep_regions, history_file, character(1)),
@@ -948,4 +1068,5 @@ save_whole(list(
 ), SWEEP_FILE)
 message("Saved -> ", SWEEP_FILE)
 
+} # end if (STAGE != "histories")
 } # end if (!country_test_mode)

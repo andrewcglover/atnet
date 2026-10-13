@@ -11,6 +11,10 @@ data_private/
 # Fit outputs, tables and figures: results stay off GitHub until chosen.
 outputs/
 
+# hipercow's cluster folder: per-machine config, the cluster's package library,
+# task files and logs. Lives only on the network share.
+hipercow/
+
 # Data and result file types are ignored everywhere by default. To publish a
 # specific file, un-ignore it by path below, e.g.  !inst/extdata/lookup.csv
 *.rds

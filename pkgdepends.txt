@@ -1,0 +1,33 @@
+# Packages for the projection jobs on the DIDE cluster, installed by
+# hipercow::hipercow_provision() into hipercow/lib/. Lines starting "repo::"
+# add a package repository.
+#
+# site is NOT listed here: its Remotes field asks for upstream
+# mrc-ide/malariasimulation, which conflicts with the fork below. It is
+# installed afterwards, without its dependencies, by provision_site.R. Its
+# imports are listed here instead, so it finds them already installed.
+repo::https://mrc-ide.r-universe.dev
+
+# The ATN fork of malariasimulation, pinned by tag.
+andrewcglover/malariasimulation@v0.2-atn
+
+# Used by analysis/07_run_projections.R.
+dplyr
+tidyr
+pkgload
+
+# atnet's own imports (atnet itself is loaded from the share with pkgload).
+jsonlite
+readxl
+
+# site's Depends and Imports, apart from malariasimulation.
+sf
+cli
+ggplot2
+orderly
+patchwork
+rappdirs
+rlang
+scales
+stringr
+withr

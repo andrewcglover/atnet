@@ -22,13 +22,14 @@
 #
 #   new_batch() checks that atnet's and the fork's code are committed and that
 #   the fork's code matches the copy installed on the cluster; freezes atnet's
-#   code at its commit in outputs/projections/code/<commit>/, which the jobs run,
-#   so later edits cannot reach a queued job; and runs a pre-flight on this
-#   computer: 07's setup and every region's parameters (the history, and every
-#   arm at the first and last realisations of the draws table), with no
-#   simulation. Its settings are 07's for this results folder, as name = value
-#   strings (see BATCH_SETTINGS); STAGE, SWEEP_CORES, SWEEP_REGIONS and DRAW_ROWS
-#   are set per job. A later batch of realisations into the same folder must use
+#   code at the last commit that changed it, in
+#   outputs/projections/code/<commit>/, which the jobs run, so later edits
+#   cannot reach a queued job; and runs a pre-flight on this computer: 07's
+#   setup and every region's parameters (the history, and every arm at the
+#   first and last realisations of the draws table), with no simulation. Its
+#   settings are 07's for this results folder, as name = value strings (see
+#   BATCH_SETTINGS); STAGE, SWEEP_CORES, SWEEP_REGIONS and DRAW_ROWS are set
+#   per job. A later batch of realisations into the same folder must use
 #   the same settings and code (07 checks settings.rds).
 # =====================================================================
 
@@ -68,7 +69,9 @@ check_clean <- function() {
     stop("atnet has uncommitted changes to its code; commit them first:\n",
          paste(st$out, collapse = "\n"), call. = FALSE)
   }
-  atnet_sha <- git(".", "rev-parse", "HEAD")$out
+  # The last commit that changed that code: the frozen copy and the results are
+  # keyed on it, so commits elsewhere in atnet (such as to this script) reuse it.
+  atnet_sha <- git(".", "log", "-1", "--format=%H", "--", ATNET_CODE)$out
   if (git(".", "fetch", "-q")$ok) {
     n <- as.integer(strsplit(git(".", "rev-list", "--left-right", "--count", "HEAD...origin/main")$out,
                              "\\s+")[[1]])

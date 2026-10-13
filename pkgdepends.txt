@@ -20,14 +20,10 @@ pkgload
 jsonlite
 readxl
 
-# site's Depends and Imports, apart from malariasimulation.
+# site's Depends and Imports (site 1.0.10), apart from malariasimulation,
+# dplyr and tidyr.
 sf
-cli
-ggplot2
 orderly
-patchwork
 rappdirs
 rlang
-scales
-stringr
 withr

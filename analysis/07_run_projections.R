@@ -72,7 +72,8 @@
 #   Each sweep also writes sweep_rows<a>-<b>.rds, or sweep_<regions>_rows<a>-<b>.rds
 #   for a subset of regions (settings, run times, failures); a sweep that left jobs
 #   failed or not started is finished by launching it again. The folder's
-#   settings.rds stops a later batch of realisations from mixing settings.
+#   settings.rds stops a later batch of realisations from mixing settings or
+#   versions (the fork, the model's packages, R, the site file, this code).
 #
 #   Change COUNTRY_ISO to run any available country. Default: MLI (Mali).
 #
@@ -113,25 +114,50 @@ if (!"omega_atn" %in% names(malariasimulation::get_parameters())) {
   stop("The loaded malariasimulation is not the ATN fork. Set ATN_FORK_PATH to the fork's ",
        "folder, or install the fork.", call. = FALSE)
 }
-# Which fork produced the results: the tag or commit of the source folder, or the
-# installed package's version and GitHub reference.
-fork_version <- if (nzchar(FORK_PATH)) {
-  tryCatch(system(sprintf('git -C "%s" describe --tags --always --dirty', FORK_PATH), intern = TRUE),
+git_out <- function(dir, args) {
+  tryCatch(system(sprintf('git -C "%s" %s', dir, args), intern = TRUE),
            error = function(e) NA_character_, warning = function(w) NA_character_)
+}
+# Which fork produced the results. From a source folder: its commit, with
+# "-dirty" if its code (R/, src/, DESCRIPTION, NAMESPACE, inst/) has uncommitted
+# changes; installed: the package's version and GitHub commit.
+if (nzchar(FORK_PATH)) {
+  fork_dirty   <- length(git_out(FORK_PATH, paste("status --porcelain --untracked-files=no --",
+                                                  "R src DESCRIPTION NAMESPACE inst"))) > 0
+  fork_sha     <- paste0(git_out(FORK_PATH, "rev-parse HEAD"), if (fork_dirty) "-dirty")
+  fork_version <- paste0(git_out(FORK_PATH, "describe --tags --always"), if (fork_dirty) "-dirty")
 } else {
   d <- utils::packageDescription("malariasimulation")
-  paste(c(d$Version, d$RemoteRef, d$RemoteSha), collapse = " ")
+  fork_sha     <- if (is.null(d$RemoteSha)) NA_character_ else d$RemoteSha
+  fork_version <- paste(c(d$Version, d$RemoteRef, d$RemoteSha), collapse = " ")
 }
 # And which version of this package ("-dirty" = uncommitted changes). On the
 # cluster, where git may be missing, the submission passes it in ATNET_VERSION.
 atnet_version <- Sys.getenv("ATNET_VERSION", "")
-if (!nzchar(atnet_version)) {
-  atnet_version <- tryCatch(system(sprintf('git -C "%s" describe --always --dirty', ATNET_PATH), intern = TRUE),
-                            error = function(e) NA_character_, warning = function(w) NA_character_)
-}
+if (!nzchar(atnet_version)) atnet_version <- git_out(ATNET_PATH, "describe --always --dirty")
 library(site)
 library(dplyr); library(tidyr)
 library(parallel)
+
+# What the simulations themselves depend on besides their inputs: the fork, the
+# packages that run the model, and R. A saved history is reused only if it was
+# built with the same; settings.rds adds the site file and this pipeline's code
+# (code_md5, below), so that one results folder never mixes versions.
+pkg_id <- function(p) {
+  d <- utils::packageDescription(p)
+  paste(c(d$Version, d$RemoteSha), collapse = " ")
+}
+sim_identity <- list(
+  fork_sha  = fork_sha,
+  packages  = vapply(c("malariasimulation", "individual", "dqrng", "malariaEquilibrium", "site"),
+                     pkg_id, character(1)),
+  r_version = R.version$version.string
+)
+# hipercow's id for the installation of the cluster's library (none locally).
+conan_id <- local({
+  d <- list.files(file.path(.libPaths(), ".conan"))
+  if (length(d)) max(d) else NA_character_
+})
 
 # ---------------------------------------------------------------------
 # 0. Paths & top-level settings
@@ -197,7 +223,8 @@ SEED_BASE <- 20261011L
 branch_year <- 2022L
 # Saved 2000-2021 histories, one file per region, reused by every later batch of
 # realisations (and by the fixed half-life runs). A history is reused only if its
-# parameters are identical to the ones this run would build. HISTORY_DIR
+# parameters are identical to the ones this run would build, and it was built with
+# the same fork, model packages and R (sim_identity). HISTORY_DIR
 # overrides the folder, so that tests never share the final runs' histories.
 HISTORY_DIR <- Sys.getenv("HISTORY_DIR", file.path(ATNET_PATH, "outputs", "projections", "history"))
 
@@ -297,9 +324,23 @@ future_interventions <- list(
   lsm             = FALSE
 )
 
-site_obj     <- readRDS(SITE_FILE)
-country_name <- unique(site_obj$country)[1]
+site_obj      <- readRDS(SITE_FILE)
+site_file_md5 <- unname(tools::md5sum(SITE_FILE))
+country_name  <- unique(site_obj$country)[1]
 message(sprintf("Country: %s (%s)", country_name, COUNTRY_ISO))
+message(sprintf("Fork %s | site package %s | %s", fork_version, sim_identity$packages[["site"]],
+                sim_identity$r_version))
+
+# This script and the package code it calls, ignoring comments and layout: any
+# other change starts a new results folder (settings.rds).
+code_md5 <- local({
+  f <- tempfile()
+  on.exit(unlink(f))
+  code <- file.path(CODE_PATH, c("analysis/07_run_projections.R", "R/expand_interventions.R",
+                                 "R/itn_draws.R"))
+  writeLines(unlist(lapply(code, function(x) deparse(parse(x, keep.source = FALSE, encoding = "UTF-8")))), f)
+  unname(tools::md5sum(f))
+})
 message(sprintf("Realisations (draws-table rows): %d-%d (%d) | seeds %d-%d | cores: %d", draw_bounds[1], draw_bounds[2],
                 length(draw_rows), SEED_BASE + draw_bounds[1], SEED_BASE + draw_bounds[2], N_CORES))
 message(sprintf("Antimalarial half-life: %s | arms: %s",
@@ -827,8 +868,9 @@ run_history <- function(region) {
   if (file.exists(f)) {
     h <- readRDS(f)
     if (!identical(h$parameters, p) || !identical(h$seed, SEED_BASE) ||
-        !identical(h$end_day, history_end_day)) {
-      stop(f, " was made with different inputs. Move it to rebuild the history.", call. = FALSE)
+        !identical(h$end_day, history_end_day) || !identical(h$sim_identity, sim_identity)) {
+      stop(f, " was made with different inputs, or another fork, package or R version. ",
+           "Move it to rebuild the history.", call. = FALSE)
     }
     return(list(region = region, file = f, reused = TRUE, minutes = h$minutes))
   }
@@ -841,7 +883,8 @@ run_history <- function(region) {
   r <- run_resumable_simulation(history_end_day, parameters = p, correlations = correlations)
   minutes <- minutes_since(t0)
   save_whole(list(region = region, parameters = p, seed = SEED_BASE, end_day = history_end_day,
-                  fork_version = fork_version, minutes = minutes, state = r$state,
+                  fork_version = fork_version, sim_identity = sim_identity, code_md5 = code_md5,
+                  conan_id = conan_id, minutes = minutes, state = r$state,
                   data = annotate(r$data, region, "history", NA_integer_, SEED_BASE)), f)
   message(sprintf("History %s: %.1f min", region, minutes))
   list(region = region, file = f, reused = FALSE, minutes = minutes)
@@ -915,7 +958,8 @@ run_job <- function(job, end_day = END_DAY) {
     out <- if (NROW(x$failures)) job_file(job, FAILED_DIR) else f
     save_whole(c(list(region = job$region, draw = job$draw, seed = SEED_BASE + job$draw,
                       end_day = end_day, fork_version = fork_version,
-                      atnet_version = atnet_version,
+                      atnet_version = atnet_version, sim_identity = sim_identity,
+                      code_md5 = code_md5, site_file_md5 = site_file_md5, conan_id = conan_id,
                       history_md5 = unname(tools::md5sum(history_file(job$region)))), x), out)
     message(sprintf("Job %s realisation %d: %.0f min, %d failure(s)", job$region, job$draw,
                     sum(x$minutes, na.rm = TRUE), NROW(x$failures)))
@@ -941,6 +985,9 @@ if (isTRUE(getOption("country_test_mode"))) {
 run_settings <- list(
   country_iso      = COUNTRY_ISO,
   fork_version     = fork_version,
+  sim_identity     = sim_identity,
+  site_file_md5    = site_file_md5,
+  code_md5         = code_md5,
   draws_md5        = unname(tools::md5sum(DRAWS_FILE)),
   itn_draws_source = itn_draws_source()[c("repo", "commit", "md5")],
   human_pop        = human_pop,
@@ -1024,7 +1071,7 @@ parallel::clusterExport(cl, c(
   "cd_cov", "campaign_cov", "cd_interval", "retention_time", "deltaq_use",
   "render_overrides", "form_overrides", "human_pop", "future_interventions",
   "COUNTRY_ISO", "HISTORY_DIR", "JOB_DIR", "FAILED_DIR", "END_DAY", "keep_columns",
-  "fork_version", "atnet_version"
+  "fork_version", "atnet_version", "sim_identity", "code_md5", "site_file_md5", "conan_id"
 ))
 
 # Segment 1: the shared histories, one per region (reused when saved; in the

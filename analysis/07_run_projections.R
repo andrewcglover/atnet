@@ -311,6 +311,68 @@ retention_time <- if (!is.null(retention_override)) retention_override else rete
 message(sprintf("Net retention = %.1f days (%s)", retention_time,
                 if (is.null(retention_override)) sprintf("%g years", retention_years) else "manual override"))
 
+# IRS efficacy must wane with time since spraying. malariasimulation keeps each
+# person's last spray date for life, so a slope of the wrong sign drives an effect
+# to 0 or 1 for good, years after the product was last used. Some fitted slopes in
+# the site package's IRS table have that sign: deterrence of DDT (+0.004, the Mali
+# site file, 2000-2016) and Vectron, and mortality of Vectron. Each such slope is
+# replaced by Actellic 300CS's, whose deterrence slope Sherrard-Smith et al. (2018,
+# Nat Commun 9:4982, Supplementary Table 3) set equal to its mortality slope.
+# Every replacement is reported and recorded in settings.rds; the site file itself
+# is never edited. An IRS product used in any year whose curves still give an
+# impossible probability (over 20 years after spraying) stops the run.
+irs_gamma_actellic <- c(ls_gamma = -0.009, ms_gamma = -0.009)
+iv <- site_obj$interventions
+irs_corrections <- list()
+for (par in names(irs_gamma_actellic)) {
+  bad <- which(iv[[par]] > 0)
+  for (ins in unique(iv$irs_insecticide[bad])) {
+    k <- bad[iv$irs_insecticide[bad] == ins]
+    irs_corrections[[length(irs_corrections) + 1L]] <- data.frame(
+      insecticide = ins, parameter = par, from = paste(unique(iv[[par]][k]), collapse = ","),
+      to = irs_gamma_actellic[[par]], years = paste(range(iv$year[k]), collapse = "-"),
+      region_years = length(k), stringsAsFactors = FALSE)
+  }
+  iv[[par]][bad] <- irs_gamma_actellic[[par]]
+}
+irs_corrections <- do.call(rbind, irs_corrections)   # NULL if none
+for (k in seq_len(NROW(irs_corrections))) {
+  x <- irs_corrections[k, ]
+  message(sprintf("%sIRS %s: %s %s -> %g (Actellic's) in %d region-years, %s%s",
+                  if (x$parameter == "ls_gamma") "WARNING: " else "", x$insecticide, x$parameter,
+                  x$from, x$to, x$region_years, x$years,
+                  if (x$parameter == "ls_gamma") "; this sets the product's residual life" else ""))
+}
+# The problems, if any, of one IRS parameter set over 20 years after spraying, with
+# the probabilities computed as malariasimulation does (R/vector_control.R).
+irs_par <- c("ls_theta", "ls_gamma", "ks_theta", "ks_gamma", "ms_theta", "ms_gamma")
+irs_problems <- function(x, k0 = malariasimulation::get_parameters()$k0, t = 0:(20 * 365)) {
+  if (anyNA(unlist(x[irs_par]))) return("a parameter is missing")
+  ls <- plogis(x$ls_theta + x$ls_gamma * t)
+  ks <- k0 * plogis(x$ks_theta + x$ks_gamma * t)
+  ms <- plogis(x$ms_theta + x$ms_gamma * t)
+  js <- 1 - ls - ks
+  ls_ <- ls * (1 - ms); ks_ <- ks * (1 - ms); js_ <- js * (1 - ms) + ms
+  rs <- (1 - ks_ / k0) * js_ / (ls_ + js_)
+  ss <- ks_ / k0
+  problem <- c("feeding success falls with time" = x$ks_gamma < 0,
+               "killed plus fed exceeds 1"        = any(js < 0),
+               "P(repelled) leaves 0-1"           = any(rs < 0 | rs > 1),
+               "P(survives) leaves 0-1"           = any(ss < 0 | ss > 1))
+  names(problem)[problem]
+}
+irs_used <- unique(iv[!is.na(iv$irs_cov) & iv$irs_cov > 0, c("irs_insecticide", irs_par)])
+for (k in seq_len(nrow(irs_used))) {
+  problem <- irs_problems(irs_used[k, ])
+  if (length(problem)) {
+    stop(sprintf("IRS %s in the site file: %s. Decide how to correct it in this script ",
+                 irs_used$irs_insecticide[k], paste(problem, collapse = "; ")),
+         "(next to irs_gamma_actellic); never edit the site file.", call. = FALSE)
+  }
+}
+site_obj$interventions <- iv
+rm(iv, irs_used)
+
 # ---------------------------------------------------------------------
 # 1. CD coverage math
 #    Mass campaigns reach campaign_cov of the population. Continuous
@@ -601,14 +663,8 @@ build_params <- function(region, arm, draw) {
   site_row <- site_obj$sites[site_obj$sites$name_1 == region, , drop = FALSE]
   ms       <- site::subset_site(site_obj, site_row)
 
+  # (IRS slopes of the wrong sign were corrected in site_obj when it was read.)
   ms_ext <- expand_interventions(ms, expand_year = n_future_years)
-
-  # WORKAROUND (2026-06-22): the MLI site file has ms_gamma = +0.004 for all DDT
-  # IRS rows (2000-2016) — wrong sign, so deterrence rises to 1 instead of decaying
-  # to 0 (inflates Z, suppresses biting). actellic rows (2017+) are correct.
-  # Flip any positive ms_gamma to negative (magnitude preserved). Raise upstream
-  # with the site-file maintainer. -abs() is idempotent (correct rows unaffected).
-  ms_ext$interventions$ms_gamma <- -abs(ms_ext$interventions$ms_gamma)
 
   fut    <- ms_ext$interventions$year >= future_yr0
 
@@ -899,7 +955,8 @@ run_settings <- list(
   branch_year      = branch_year,
   future_campaign_days = future_campaign_days,
   end_day          = END_DAY,
-  keep_columns     = keep_columns
+  keep_columns     = keep_columns,
+  irs_corrections  = irs_corrections
 )
 settings_file <- file.path(OUT_DIR, "settings.rds")
 if (file.exists(settings_file)) {

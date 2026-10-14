@@ -49,7 +49,7 @@ data {
   array[N] int<lower=0> pos_ctl;
   array[N] int<lower=0> n_trt;
   array[N] int<lower=0> pos_trt;
-  int<lower=1> Delta_r;                        // Erlang shape (= 10)
+  int<lower=1> Delta_r;                        // Erlang shape (number of EIP stages)
 
   // EIP prior hyperparameters (sourced from priors_atn_main.R).  Naming
   // convention: "excess" = the part of the baseline (control) EIP above

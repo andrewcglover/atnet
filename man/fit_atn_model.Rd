@@ -13,6 +13,7 @@ fit_atn_model(
   warmup = 1000L,
   seed = 2025L,
   cores = min(chains, parallel::detectCores()),
+  erlang_shape = 10L,
   ...
 )
 }
@@ -28,6 +29,9 @@ for the blocking models.}
 includes the warmup.}
 
 \item{cores}{Number of chains run at once.}
+
+\item{erlang_shape}{Number of stages in the extrinsic incubation period,
+passed to \code{\link[=eip_stan_data]{eip_stan_data()}}; ignored by the blocking models.}
 
 \item{...}{Further arguments to \code{rstan::sampling()}.}
 }

@@ -89,6 +89,8 @@ eip_hill_inits <- function(priors, K) {
 #' @param chains,iter,warmup,seed Passed to `rstan::sampling()`; `iter`
 #'   includes the warmup.
 #' @param cores Number of chains run at once.
+#' @param erlang_shape Number of stages in the extrinsic incubation period,
+#'   passed to [eip_stan_data()]; ignored by the blocking models.
 #' @param ... Further arguments to `rstan::sampling()`.
 #'
 #' @return A `stanfit` object.
@@ -96,7 +98,8 @@ eip_hill_inits <- function(priors, K) {
 #' @export
 fit_atn_model <- function(model, table, priors = atn_priors(), chains = 4L,
                           iter = 3000L, warmup = 1000L, seed = 2025L,
-                          cores = min(chains, parallel::detectCores()), ...) {
+                          cores = min(chains, parallel::detectCores()),
+                          erlang_shape = 10L, ...) {
   if (!requireNamespace("rstan", quietly = TRUE)) {
     stop("Fitting needs the rstan package.", call. = FALSE)
   }
@@ -106,7 +109,7 @@ fit_atn_model <- function(model, table, priors = atn_priors(), chains = 4L,
   }
 
   data <- switch(spec$data,
-    eip = eip_stan_data(table, priors),
+    eip = eip_stan_data(table, priors, erlang_shape = erlang_shape),
     tra = blocking_stan_data(table, "tra", priors),
     tba_lab = blocking_stan_data(table, "tba_lab", priors)
   )

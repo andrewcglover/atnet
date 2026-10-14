@@ -10,14 +10,19 @@
 # diagnostics file estimates how long the full fit would take.
 #   Rscript analysis/03_fit_models.R --smoke
 #
-# Each run writes to outputs/fits/<YYYYMMDD_HHMM>/ (with "_smoke" appended for a
-# smoke run), for each model:
+# The EIP models fit an Erlang EIP with ATN_ERLANG_SHAPE stages (default 40, the
+# spor_len of the projections in 07_run_projections.R; the fits of 9 October 2026,
+# outputs/fits/20261009_1853, used 10). The blocking models do not use it.
+#   ATN_ERLANG_SHAPE=10 Rscript analysis/03_fit_models.R eip_hill
+#
+# Each run writes to outputs/fits/<YYYYMMDD_HHMM>/, with "_eipR<shape>" appended
+# when an EIP model is fitted and "_smoke" for a smoke run, for each model:
 #   <model>.rds              the stanfit object (every draw)
 #   <model>_data.rds         the exact data list the model was given
 #   <model>_priors.json      the priors it was fitted with
 #   <model>_diagnostics.txt  sampler diagnostics and parameter summaries
 #   <model>_trace.png, <model>_pairs.png, <model>_ppc.png
-# and inputs.txt, naming the tables the fits were given.
+# and inputs.txt, naming the tables the fits were given and the Erlang shape.
 #
 # Run with the working directory at the root of the package.
 
@@ -39,6 +44,11 @@ unknown <- setdiff(models, names(atn_models()))
 if (length(unknown)) {
   stop("Unknown model(s): ", toString(unknown), call. = FALSE)
 }
+erlang_shape <- as.integer(Sys.getenv("ATN_ERLANG_SHAPE", "40"))
+if (is.na(erlang_shape) || erlang_shape < 1L) {
+  stop("ATN_ERLANG_SHAPE must be a positive whole number.", call. = FALSE)
+}
+fits_eip <- any(vapply(atn_models()[models], function(s) s$data == "eip", logical(1)))
 
 latest <- function(pattern) {
   f <- sort(list.files("outputs", pattern = pattern, full.names = TRUE))
@@ -54,11 +64,14 @@ spz <- read.csv(spz_path, check.names = FALSE)
 ooc <- read.csv(ooc_path, check.names = FALSE)
 
 out_dir <- file.path("outputs", "fits", paste0(format(Sys.time(), "%Y%m%d_%H%M"),
+                                              if (fits_eip) paste0("_eipR", erlang_shape),
                                               if (smoke) "_smoke"))
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 writeLines(c(paste("sporozoite table:", spz_path),
              paste("oocyst table:    ", ooc_path),
              paste("models:          ", toString(models)),
+             if (fits_eip) sprintf("erlang shape:     %d (EIP stages; EIP models only)",
+                                   erlang_shape),
              sprintf("run:              %d chain(s), %d iterations, %d warmup%s",
                      run$chains, run$iter, run$warmup,
                      if (smoke) " (smoke run)" else ""),
@@ -102,7 +115,7 @@ for (model in models) {
   warned <- character(0)
   fit <- withCallingHandlers(
     fit_atn_model(model, table, chains = run$chains, iter = run$iter,
-                  warmup = run$warmup),
+                  warmup = run$warmup, erlang_shape = erlang_shape),
     warning = function(w) {
       warned <<- c(warned, conditionMessage(w))
       invokeRestart("muffleWarning")
@@ -121,7 +134,7 @@ for (model in models) {
 
   path <- function(suffix) file.path(out_dir, paste0(model, suffix))
   saveRDS(fit, path(".rds"))
-  data <- switch(spec$data, eip = eip_stan_data(table),
+  data <- switch(spec$data, eip = eip_stan_data(table, erlang_shape = erlang_shape),
                  tra = blocking_stan_data(table, "tra"),
                  tba_lab = blocking_stan_data(table, "tba_lab"))
   saveRDS(data, path("_data.rds"))
@@ -138,6 +151,9 @@ for (model in models) {
                                type = "message")
   sink(path("_diagnostics.txt"))
   cat(sprintf("%s fitted in %.1f minutes, including compiling\n", model, minutes))
+  if (spec$data == "eip") {
+    cat(sprintf("Erlang shape (EIP stages): %d\n", data$Delta_r))
+  }
   cat(sprintf("slowest chain: %.0f s warmup, %.0f s sampling\n",
               slowest[["warmup"]], slowest[["sample"]]))
   if (smoke) {

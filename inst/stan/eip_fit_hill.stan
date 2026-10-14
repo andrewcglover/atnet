@@ -135,7 +135,7 @@ data {
   array[N] int<lower=0> pos_ctl;
   array[N] int<lower=0> n_trt;
   array[N] int<lower=0> pos_trt;
-  int<lower=1> Delta_r;                        // Erlang shape (= 10)
+  int<lower=1> Delta_r;                        // Erlang shape (number of EIP stages)
 
   // EIP prior hyperparameters (from atn_priors() via prior_stan_data()).  The
   // baseline-EIP-floor reparameterisation matches eip_fit.stan; the

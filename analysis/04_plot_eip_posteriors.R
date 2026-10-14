@@ -45,7 +45,7 @@ fit_dir <- if (length(args)) {
   file.path("outputs", "fits", args[[1]])
 } else {
   stamps <- sort(list.files(file.path("outputs", "fits"),
-                            pattern = "^[0-9]{8}_[0-9]{4}$"))
+                            pattern = "^[0-9]{8}_[0-9]{4}(_eipR[0-9]+)?$"))
   if (!length(stamps)) {
     stop("No full fit in outputs/fits/. Run analysis/03_fit_models.R first.",
          call. = FALSE)
@@ -116,14 +116,25 @@ rate_y_minor_breaks <- seq(0, 1, by = 0.1)
 rate_y_lim          <- c(0, 1.05)   # ylim leaves a sliver of headroom above 1
 
 # ---- Universal constants (shared by both models) ----
-d       <- 10                                        # Erlang shape
+# The Erlang shape (number of EIP stages) is the one the fits were given, read from
+# the data each was fitted to rather than assumed: it was 10 up to the fits of
+# 9 October 2026 and 40 from 14 October 2026 (ATN_ERLANG_SHAPE in 03_fit_models.R).
+# Both EIP models in a folder must share it; process_model() checks each in turn.
+d_files <- file.path(fit_dir, paste0(c("eip_hill", "eip_exponential"), "_data.rds"))
+d_files <- d_files[file.exists(d_files)]
+if (!length(d_files)) {
+  stop("No EIP fit data in ", fit_dir, ". Run analysis/03_fit_models.R first.",
+       call. = FALSE)
+}
+d       <- readRDS(d_files[[1]])$Delta_r             # Erlang shape
+cat("Erlang shape (EIP stages): ", d, "\n", sep = "")
 x_grid  <- seq(x_min, x_max, by = x_grid_step)
 
 # ==== Model-specific r(x) computation =========================================
 
 # Exponential-decay model: exact Lambert-W inversion of the cumulative
 # integrated rate (matches the closed form used by eip_fit.stan).
-compute_r_vec_exp <- function(rho, rho0, zeta, x, d = 10) {
+compute_r_vec_exp <- function(rho, rho0, zeta, x, d) {
   A        <- (rho - rho0) / zeta
   K        <- (rho - rho0) / rho
   baseline <- d / rho
@@ -181,7 +192,7 @@ hill_S <- function(tau, x_exp, rho, rho0, s_half, nH) {
   out
 }
 
-compute_r_vec_hill <- function(rho, rho0, s_half, nH, x, d = 10) {
+compute_r_vec_hill <- function(rho, rho0, s_half, nH, x, d) {
   baseline <- d / rho
   r <- numeric(length(x))
   for (i in seq_along(x)) {
@@ -304,7 +315,7 @@ make_G_hill <- function(delta, rho, rho0, s_half, nH) {
 
 # Control arm: rate is rho throughout (no exposure). Closed form,
 # identical for both models.
-implied_tau_ctl <- function(p, tau_obs, rho, d = 10) {
+implied_tau_ctl <- function(p, tau_obs, rho, d) {
   if (!is.finite(p)) return(NA_real_)
   p <- pmax(pmin(p, 1 - 1e-12), 1e-12)
   s_hat <- qgamma(p, shape = d, rate = 1)
@@ -312,7 +323,7 @@ implied_tau_ctl <- function(p, tau_obs, rho, d = 10) {
 }
 
 # Treatment arm: numerical inversion of G. Model dispatch via the spec.
-implied_tau_trt_exp <- function(p, delta_val, tau_obs, med, d = 10) {
+implied_tau_trt_exp <- function(p, delta_val, tau_obs, med, d) {
   if (!is.finite(p)) return(NA_real_)
   p <- max(min(p, 1 - 1e-12), 1e-12)
   s_hat  <- qgamma(p, shape = d, rate = 1)
@@ -324,7 +335,7 @@ implied_tau_trt_exp <- function(p, delta_val, tau_obs, med, d = 10) {
                   error = function(e) NA_real_)
   max(res, 0.1)
 }
-implied_tau_trt_hill <- function(p, delta_val, tau_obs, med, d = 10) {
+implied_tau_trt_hill <- function(p, delta_val, tau_obs, med, d) {
   if (!is.finite(p)) return(NA_real_)
   p <- max(min(p, 1 - 1e-12), 1e-12)
   s_hat  <- qgamma(p, shape = d, rate = 1)

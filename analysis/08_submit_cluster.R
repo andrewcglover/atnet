@@ -47,7 +47,7 @@ ATNET_CODE <- c("analysis/07_run_projections.R", "R", "DESCRIPTION", "NAMESPACE"
 FORK_CODE  <- c("R", "src", "DESCRIPTION", "NAMESPACE", "inst")
 # 07's settings that a batch may set (see 07's header).
 BATCH_SETTINGS <- c("OUT_SUFFIX", "HUMAN_POP", "END_DAY", "HISTORY_DIR", "ANTIMAL_HL_YEARS",
-                    "SWEEP_ARMS", "NET_RETENTION_DAYS")
+                    "SWEEP_ARMS", "NET_RETENTION_DAYS", "ATN_DELTAQ", "ATN_SPOR_LEN")
 
 git <- function(dir, ...) {
   out <- suppressWarnings(system2("git", c("-C", shQuote(dir), ...), stdout = TRUE, stderr = TRUE))

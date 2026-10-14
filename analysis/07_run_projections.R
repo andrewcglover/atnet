@@ -59,6 +59,11 @@
 #     HUMAN_POP         simulated population (default 100000); smaller for tests
 #     END_DAY           stop the arms on this day instead of the last one (tests)
 #     HISTORY_DIR       folder of the saved histories (tests use their own)
+#     ATN_DELTAQ        exposure classes (default 20)
+#     ATN_SPOR_LEN      EIP Erlang stages (default 40). Both set array sizes, so
+#                       they are part of each history's file name and are recorded
+#                       in settings.rds (deltaq_use, spor_len_use); 10 and 10 give
+#                       the earlier configuration
 #     SWEEP_CORES, NET_RETENTION_DAYS, OUT_SUFFIX, ATN_FORK_PATH, ATNET_CODE_DIR,
 #     ATNET_VERSION: see below
 #   A "realisation" is simulation i: row i of the draws table, with seed
@@ -311,7 +316,29 @@ retention_years <- 1.8
 # NET_RETENTION_DAYS: override the retention (days). Empty = retention_years.
 ret_env            <- Sys.getenv("NET_RETENTION_DAYS", "")
 retention_override <- if (nzchar(ret_env)) as.numeric(ret_env) else NULL
-deltaq_use     <- 10L
+# Compartment counts. Both are structural: they set the adult-mosquito array sizes
+# at model construction, so a saved state only restores into a model of the same
+# sizes (hence both appear in each history's file name, below).
+#   deltaq   exposure classes spanning atn_window (time since an antimalarial dose)
+#   spor_len Erlang stages for the EIP
+# 20/40 from 2026-10-14: 40 EIP stages put the Erlang EIP spread inside the range
+# implied by the warm-temperature laboratory estimates (Stopard 2023 thesis Ch. 3-4
+# give shapes of 32-43 at 25-30 C; the fitted all-temperature value is 47), where
+# spor_len = 10 was far more dispersed than any published estimate. 40 also resolves
+# the post-infection blocking kernel, which at 10 stages decayed almost entirely
+# within the first stage and was effectively lost for the steeper draws. deltaq = 20
+# halves the exposure conveyor's smearing of time since dose (about -5% of the
+# delivered pre-infection and EIP kernel effect at 10, about -2.7% at 20).
+# ATN_DELTAQ / ATN_SPOR_LEN override both, for timing comparisons against 10/10.
+deltaq_use   <- as.integer(Sys.getenv("ATN_DELTAQ", "20"))
+spor_len_use <- as.integer(Sys.getenv("ATN_SPOR_LEN", "40"))
+for (nm in c("deltaq_use", "spor_len_use")) {
+  v <- get(nm)
+  if (is.na(v) || v < 1L) {
+    stop(nm, " must be a positive whole number, not '",
+         Sys.getenv(if (nm == "deltaq_use") "ATN_DELTAQ" else "ATN_SPOR_LEN"), "'.", call. = FALSE)
+  }
+}
 
 # Future non-net site interventions (same defaults as previous scripts).
 future_interventions <- list(
@@ -773,10 +800,11 @@ build_params <- function(region, arm, draw) {
     vectors       = ms_ext$vectors$vector_species,
     seasonality   = ms_ext$seasonality$seasonality_parameters,
     eir           = ms$eir$eir,
-    # deltaq is the same in every segment and arm (ATN or not), so that a saved
-    # state can be resumed by any arm; without an antimalarial the extra
-    # exposure classes stay empty.
-    overrides     = c(render_overrides, form_overrides, list(deltaq = deltaq_use),
+    # deltaq and spor_len are the same in every segment and arm (ATN or not), so
+    # that a saved state can be resumed by any arm; without an antimalarial the
+    # extra exposure classes stay empty. Both set array sizes at construction.
+    overrides     = c(render_overrides, form_overrides,
+                      list(deltaq = deltaq_use, spor_len = spor_len_use),
                       atn_overrides, list(ode_max_steps = 1e8, a_tol = 0.1))
   )
 
@@ -840,9 +868,14 @@ annotate <- function(d, region, arm, draw, seed) {
 
 trim_columns <- function(d) d[grepl(paste(keep_columns, collapse = "|"), names(d))]
 
+# deltaq and spor_len are in the name because they set the adult-mosquito array
+# sizes: a history saved at other counts cannot be restored into this model, and
+# without them in the name a run at new counts would silently pick up the old file.
 history_file <- function(region) {
-  file.path(HISTORY_DIR, sprintf("%s_%s_pop%d_ret%d.rds", tolower(COUNTRY_ISO), region_tag(region),
-                                 human_pop, round(retention_time)))
+  file.path(HISTORY_DIR, sprintf("%s_%s_pop%d_ret%d_dq%d_sl%d.rds",
+                                 tolower(COUNTRY_ISO), region_tag(region),
+                                 human_pop, round(retention_time),
+                                 deltaq_use, spor_len_use))
 }
 
 job_file <- function(job, dir = JOB_DIR) {
@@ -998,6 +1031,7 @@ run_settings <- list(
   arms             = arms,
   n_steps          = n_steps,
   deltaq_use       = deltaq_use,
+  spor_len_use     = spor_len_use,
   seed_base        = SEED_BASE,
   branch_year      = branch_year,
   future_campaign_days = future_campaign_days,
@@ -1068,7 +1102,7 @@ parallel::clusterExport(cl, c(
   "future_start_day", "history_end_day", "pre_end_day", "branch_year", "future_campaign_days",
   "n_steps", "n_future_years", "draws_tab", "itn_draws", "net_of_arm",
   "net_of_site_type", "p_a_of_arm", "hl_fixed_years", "SEED_BASE",
-  "cd_cov", "campaign_cov", "cd_interval", "retention_time", "deltaq_use",
+  "cd_cov", "campaign_cov", "cd_interval", "retention_time", "deltaq_use", "spor_len_use",
   "render_overrides", "form_overrides", "human_pop", "future_interventions",
   "COUNTRY_ISO", "HISTORY_DIR", "JOB_DIR", "FAILED_DIR", "END_DAY", "keep_columns",
   "fork_version", "atnet_version", "sim_identity", "code_md5", "site_file_md5", "conan_id"

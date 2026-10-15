@@ -33,7 +33,8 @@ test_that("the EIP data carry each experiment's counts and timing", {
   expect_identical(d$pos_trt, c(2L, 5L, 9L))
   expect_identical(d$Delta_r, 10L)
   expect_equal(d$gl_M, 32L)
-  expect_equal(d$log_nH_eip_lower, 0.5)
+  # nH >= exp(0) = 1, the sigmoidality boundary (widened from 0.5, 2026-10-15).
+  expect_equal(d$log_nH_eip_lower, 0)
 })
 
 test_that("the EIP data refuse impossible counts", {

@@ -42,15 +42,23 @@ exposure as a fraction of the baseline rate;
 1.5-day half-life (95\% within 0.34 to 6.5 days).
 }
 
-Hill EIP model only, tighter than their counterparts above to keep the
-sampler away from regions where the Hill fit is numerically unstable:
+Hill EIP model only. Widened to uninformative on 2026-10-15, matching the
+blocking priors above; the earlier, tighter values are in the git history
+and in \code{tests/testthat/fixtures/priors_used_20260520.json}:
 \itemize{
-\item \code{r0_frac_eip} ~ Beta(2, 5) (95\% within 0.04 to 0.64), keeping prior mass
-away from 1, where the suppression vanishes and the kernel cannot be
-seen by the likelihood;
-\item \code{log_s_half_eip} ~ N(log 1.5, 0.4) (95\% within 0.69 to 3.3 days);
-\item \code{log_nH_eip} ~ N(log 5, 0.4) truncated below at \code{lower} = 0.5, so the
-Hill exponent is at least exp(0.5), about 1.65 (95\% within 2.3 to 11.0).
+\item \code{r0_frac_eip} ~ Beta(0.5, 0.5), Jeffreys, as in the exponential EIP
+model;
+\item \code{log_s_half_eip} ~ N(log 2, 1), as \code{log_s_half} above (median 2, 95\%
+within 0.28 to 14.3 days);
+\item \code{log_nH_eip} ~ N(log 5, 1), as \code{log_nH} above, truncated below at
+\code{lower} = 0, so the Hill exponent is at least 1 (median 5.9, 95\% within
+1.8 to 37.5). The truncation is the one informative statement left in
+this model and it is deliberate: below 1 the recovery kernel's gradient
+rises monotonically from the moment of exposure, which is the
+exponential model's shape, so \code{nH} > 1 is what makes the Hill kernel a
+distinct model. It removes 5.4\% of the prior, against 0.3\% under the
+superseded N(log 5, 0.4) with \code{lower} = 0.5, so it must be reported as a
+truncated prior rather than waved through.
 }
 
 \code{sigma_exp} ~ N+(0, 1) is the standard deviation of the per-experiment

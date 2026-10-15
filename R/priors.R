@@ -5,10 +5,19 @@
 # changed here and nowhere else.
 #
 # Moved from priors_atn_main.R (malariasimple_ATNs/dev), with the same values.
-# All four current posteriors were fitted with these values; the record each
-# fit saved is kept as tests/testthat/fixtures/priors_used_20260520.json. That
-# record lacks log_nH_eip$lower, which was then fixed inside eip_fit_hill.stan
-# at the same value, as was sigma_exp's in both EIP models.
+# The record each May 2026 fit saved is kept as
+# tests/testthat/fixtures/priors_used_20260520.json. That record lacks
+# log_nH_eip$lower, which was then fixed inside eip_fit_hill.stan, as was
+# sigma_exp's in both EIP models.
+#
+# 2026-10-15: the three Hill-EIP kernel priors were deliberately widened to
+# uninformative, so they no longer match that record; everything else still
+# does. The Hill EIP fit is the one the projections draw from, and s_half is
+# the parameter efficacy is most sensitive to, so a prior that pinned its
+# upper tail was not defensible even though the median barely moved. They now
+# match the blocking models' corresponding priors, so the package uses one
+# weakly-informative prior for a half-time and one for a Hill exponent
+# throughout. See test-priors.R, which records exactly what differs.
 
 #' Prior hyperparameters for the Stan models
 #'
@@ -37,14 +46,22 @@
 #' * `log_zeta` ~ N(log(log 2 / 1.5), 0.75), the recovery rate, centred on a
 #'   1.5-day half-life (95% within 0.34 to 6.5 days).
 #'
-#' Hill EIP model only, tighter than their counterparts above to keep the
-#' sampler away from regions where the Hill fit is numerically unstable:
-#' * `r0_frac_eip` ~ Beta(2, 5) (95% within 0.04 to 0.64), keeping prior mass
-#'   away from 1, where the suppression vanishes and the kernel cannot be
-#'   seen by the likelihood;
-#' * `log_s_half_eip` ~ N(log 1.5, 0.4) (95% within 0.69 to 3.3 days);
-#' * `log_nH_eip` ~ N(log 5, 0.4) truncated below at `lower` = 0.5, so the
-#'   Hill exponent is at least exp(0.5), about 1.65 (95% within 2.3 to 11.0).
+#' Hill EIP model only. Widened to uninformative on 2026-10-15, matching the
+#' blocking priors above; the earlier, tighter values are in the git history
+#' and in `tests/testthat/fixtures/priors_used_20260520.json`:
+#' * `r0_frac_eip` ~ Beta(0.5, 0.5), Jeffreys, as in the exponential EIP
+#'   model;
+#' * `log_s_half_eip` ~ N(log 2, 1), as `log_s_half` above (median 2, 95%
+#'   within 0.28 to 14.3 days);
+#' * `log_nH_eip` ~ N(log 5, 1), as `log_nH` above, truncated below at
+#'   `lower` = 0, so the Hill exponent is at least 1 (median 5.9, 95% within
+#'   1.8 to 37.5). The truncation is the one informative statement left in
+#'   this model and it is deliberate: below 1 the recovery kernel's gradient
+#'   rises monotonically from the moment of exposure, which is the
+#'   exponential model's shape, so `nH` > 1 is what makes the Hill kernel a
+#'   distinct model. It removes 5.4% of the prior, against 0.3% under the
+#'   superseded N(log 5, 0.4) with `lower` = 0.5, so it must be reported as a
+#'   truncated prior rather than waved through.
 #'
 #' `sigma_exp` ~ N+(0, 1) is the standard deviation of the per-experiment
 #' effect in every model.
@@ -65,9 +82,9 @@ atn_priors <- function() {
     log_eip_excess  = list(mean  = log(3.0) - 0.5, sd = 0.75),
     r0_frac         = list(alpha = 0.5, beta = 0.5),
     log_zeta        = list(mean  = log(log(2.0) / 1.5), sd = 0.75),
-    log_s_half_eip  = list(mean  = log(1.5), sd = 0.4),
-    log_nH_eip      = list(mean  = log(5.0), sd = 0.4, lower = 0.5),
-    r0_frac_eip     = list(alpha = 2.0, beta = 5.0)
+    log_s_half_eip  = list(mean  = log(2.0), sd = 1.0),
+    log_nH_eip      = list(mean  = log(5.0), sd = 1.0, lower = 0.0),
+    r0_frac_eip     = list(alpha = 0.5, beta = 0.5)
   )
 }
 

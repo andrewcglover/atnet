@@ -1,14 +1,32 @@
-test_that("the priors are those the current posteriors were fitted with", {
-  # Saved by each of the four fits in May 2026; all four records are identical.
-  # The record lacks the truncation point, then fixed inside the Hill model
-  # (`real<lower=0.5> log_nH`), as was sigma_exp's standard deviation of 1 in
-  # both EIP models.
+test_that("only the three Hill-EIP kernel priors differ from the May 2026 record", {
+  # The record was saved by each of the four fits in May 2026; all four are
+  # identical. It lacks the truncation point, which was then fixed inside the
+  # Hill model (`real<lower=0.5> log_nH`), as was sigma_exp's standard
+  # deviation of 1 in both EIP models.
+  #
+  # On 2026-10-15 the three Hill-EIP kernel priors were deliberately widened to
+  # uninformative (see atn_priors()). This test pins exactly which three moved
+  # and to what, and still holds everything else to the record, so an
+  # accidental change anywhere else is caught.
   used <- jsonlite::read_json(test_path("fixtures", "priors_used_20260520.json"))
   now <- atn_priors()
-  expect_equal(now$log_nH_eip$lower, 0.5)
-  now$log_nH_eip$lower <- NULL
-  expect_equal(now, used, tolerance = 1e-12)
-  expect_equal(atn_priors()$sigma_exp$sd, 1)
+
+  widened <- c("log_s_half_eip", "log_nH_eip", "r0_frac_eip")
+  expect_equal(now$log_s_half_eip, list(mean = log(2), sd = 1))
+  expect_equal(now$log_nH_eip, list(mean = log(5), sd = 1, lower = 0))
+  expect_equal(now$r0_frac_eip, list(alpha = 0.5, beta = 0.5))
+
+  # The widened pair now matches the blocking models' corresponding priors.
+  expect_equal(now$log_s_half_eip, now$log_s_half)
+  expect_equal(now$log_nH_eip[c("mean", "sd")], now$log_nH)
+  expect_equal(now$r0_frac_eip, now$r0_frac)
+
+  # nH >= 1, the sigmoidality boundary, not the old numerical exp(0.5).
+  expect_equal(exp(now$log_nH_eip$lower), 1)
+
+  expect_equal(now[setdiff(names(now), widened)],
+               used[setdiff(names(used), widened)], tolerance = 1e-12)
+  expect_equal(now$sigma_exp$sd, 1)
 })
 
 stan_files <- c("eip_fit_hill.stan", "int_fit_nb_rate_hill_bidir_splitnH.stan",

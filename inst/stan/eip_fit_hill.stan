@@ -62,21 +62,26 @@
 //   dominated the original implementation's leapfrog cost (~9 sec/
 //   step for N = 25 rows).
 //
-// Identifiability + numerical-stability constraint:
+// Identifiability constraint:
 //   log_nH is constrained to >= log_nH_eip_lower, passed in as data and
-//   0.5 in atn_priors(), i.e. nH >= exp(0.5) ~ 1.65. The
-//   biological motivation is that nH = 1 is the sigmoidality boundary
-//   (Hill recovery becomes hyperbolic), and the numerical motivation
-//   is that Stan's `inc_beta(1/n, 1 - 1/n, z)` continued-fraction
-//   expansion is slow and unstable when either argument is close to 0,
-//   which happens at both nH -> 1+ (b -> 0+) and nH -> infty (a -> 0+).
-//   Lifting the lower bound from 0 to 0.5 keeps autodiff gradients
-//   finite during warmup, even when Stan's default U(-2, 2) init
-//   draws perturb the chain away from the prior mode.
+//   0 in atn_priors(), i.e. nH >= 1. The motivation is now purely
+//   structural: nH = 1 is the sigmoidality boundary, and below it the
+//   recovery kernel's gradient rises monotonically from the moment of
+//   exposure, which is the exponential model's shape. nH > 1 is
+//   therefore what makes this a distinct model from eip_fit.stan.
 //
-//   With log_nH_eip ~ N(log 5, 0.4), only ~0.3% of prior mass falls
-//   below log_nH = 0.5 (truncation point at z = (0.5 - log 5)/0.4
-//   ~ -2.77 std devs), so the truncation is biologically negligible.
+//   Until 2026-10-15 the bound was 0.5 (nH >= ~1.65) for a numerical
+//   reason that no longer applies: Stan's `inc_beta(1/n, 1 - 1/n, z)`
+//   continued-fraction expansion is slow and unstable as either
+//   argument approaches 0, which happens at nH -> 1+ and nH -> infty.
+//   That closed form was replaced by the Gauss-Legendre quadrature in
+//   hill_J below, which is well behaved at and below nH = 1, so the
+//   bound was free to move back to where the biology puts it.
+//
+//   With log_nH_eip ~ N(log 5, 1), 5.4% of prior mass falls below
+//   log_nH = 0 -- against 0.3% under the superseded N(log 5, 0.4) with
+//   a bound of 0.5 -- so this is a materially truncated prior and must
+//   be reported as one, not waved through as negligible.
 //
 // Likelihood: paired Binomial per row with a shared logit-scale OLRE
 // offset beta_exp[exp_id] applied identically to control and 200mg arms,
@@ -172,9 +177,8 @@ parameters {
   real<lower=0, upper=1> r0_frac;      // rho_0 / rho in (0, 1); ATN-induced
                                        // fractional slowdown at exposure
   real log_s_half;                     // log of Hill half-recovery time (days)
-  real<lower=log_nH_eip_lower> log_nH; // log of Hill exponent; nH = exp(log_nH) >= ~1.65
-                                       // (lifted from 0 to 0.5 for numerical stability;
-                                       //  see header for rationale)
+  real<lower=log_nH_eip_lower> log_nH; // log of Hill exponent; nH = exp(log_nH) >= 1
+                                       // (the sigmoidality boundary; see header)
   real<lower=0> sigma_exp;             // SD of OLRE on logit scale
   vector[K] z_exp;                     // non-centred OLRE draws
 }

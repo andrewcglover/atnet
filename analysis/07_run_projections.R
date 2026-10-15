@@ -59,11 +59,12 @@
 #     HUMAN_POP         simulated population (default 100000); smaller for tests
 #     END_DAY           stop the arms on this day instead of the last one (tests)
 #     HISTORY_DIR       folder of the saved histories (tests use their own)
-#     ATN_DELTAQ        exposure classes (default 20)
-#     ATN_SPOR_LEN      EIP Erlang stages (default 40). Both set array sizes, so
+#     ATN_DELTAQ        exposure classes (default 30)
+#     ATN_SPOR_LEN      EIP Erlang stages (default 30). Both set array sizes, so
 #                       they are part of each history's file name and are recorded
 #                       in settings.rds (deltaq_use, spor_len_use); 10 and 10 give
-#                       the earlier configuration
+#                       the earlier configuration. Keep them equal unless you also
+#                       change atn_window or dem -- see the note above deltaq_use
 #     SWEEP_CORES, NET_RETENTION_DAYS, OUT_SUFFIX, ATN_FORK_PATH, ATNET_CODE_DIR,
 #     ATNET_VERSION: see below
 #   A "realisation" is simulation i: row i of the draws table, with seed
@@ -321,10 +322,24 @@ retention_override <- if (nzchar(ret_env)) as.numeric(ret_env) else NULL
 # sizes (hence both appear in each history's file name, below).
 #   deltaq   exposure classes spanning atn_window (time since an antimalarial dose)
 #   spor_len Erlang stages for the EIP
-# The two counts are set independently, because they index different clocks: deltaq
-# measures time since a dose (pharmacological), spor_len progress through sporogony
-# (developmental). They would coincide numerically only because atn_window and the
-# EIP are both about 10 days, which is not a structural fact.
+# The two index different clocks -- deltaq measures time since a dose
+# (pharmacological), spor_len progress through sporogony (developmental) -- so in
+# principle they are set independently. They are nevertheless held EQUAL, for a
+# reason that is about the blocking kernels rather than about the clocks:
+#
+#   pre-infection blocking  is evaluated per exposure class, at midpoints
+#                           s_i = (i - 1.5) * atn_window / deltaq
+#   post-infection blocking is evaluated per EIP stage, at midpoints
+#                           t_j = (j - 0.5) * dem / spor_len
+#
+# and BOTH are then pushed through the same Bompard laboratory-to-field map. With
+# atn_window = dem = 10 (both at the fork's defaults; neither is overridden here),
+# deltaq = spor_len makes those two sets of midpoints identical, so the one
+# nonlinear map is discretised one way rather than two. At 20/30 they are not:
+# 0.25, 0.75 ... 9.75 against 0.1667, 0.5 ... 9.8333. Keeping them equal is what
+# lets the pre- and post-infection sides of the blocking kernel be reported as
+# treated alike. Note this ties the choice to atn_window = dem = 10; if either
+# moves, equal counts no longer align the grids and this comment is wrong.
 #
 # spor_len = 30 from 2026-10-14, for both the simulation and the Stan fit that
 # supplies its kernels. The laboratory assays were held at 27 C after the infectious
@@ -341,15 +356,18 @@ retention_override <- if (nzchar(ret_env)) as.numeric(ret_env) else NULL
 # Cost of 30 over 40, accepted: spor_len also sets the grid for the post-infection
 # blocking kernel, whose stage-mean error widens from -2..+4% at 40 to -12..+5%.
 #
-# deltaq = 20 halves the exposure conveyor's smearing of time since dose (about -5%
-# of the delivered pre-infection and EIP kernel effect at 10, about -2.7% at 20,
-# -1.9% at 30; conservative at every value). The EIP suppression is ~85% gone by 3
-# days and ~95% by 4, so the first four days are what need resolving: deltaq = 10
-# covers them with about 4 classes, deltaq = 20 with about 8. Run time does not
-# constrain either count -- the adult ODE is ~0.3% of the work, and 20/40 against
-# 10/10 added under 1% to the 2026-10-14 timing benchmark.
+# deltaq = 30 from 2026-10-15, raised from 20 to align the two grids above. It also
+# cuts the exposure conveyor's smearing of time since dose (about -5% of the
+# delivered pre-infection and EIP kernel effect at deltaq = 10, about -2.7% at 20,
+# -1.9% at 30; conservative at every value), and the EIP suppression is ~85% gone by
+# 3 days and ~95% by 4, so the first four days are what need resolving: deltaq = 10
+# covers them with about 4 classes, 20 with about 8, 30 with about 12. On its own
+# that was worth only +0.2 points of efficacy over deltaq = 20, which is why 20
+# stood until the grid argument settled it. Run time does not constrain either
+# count -- the adult ODE is ~0.3% of the work, and 20/40 (882 adult states per
+# species, against 992 at 30/30) added under 1% to the 2026-10-14 timing benchmark.
 # ATN_DELTAQ / ATN_SPOR_LEN override both, for timing and sensitivity comparisons.
-deltaq_use   <- as.integer(Sys.getenv("ATN_DELTAQ", "20"))
+deltaq_use   <- as.integer(Sys.getenv("ATN_DELTAQ", "30"))
 spor_len_use <- as.integer(Sys.getenv("ATN_SPOR_LEN", "30"))
 for (nm in c("deltaq_use", "spor_len_use")) {
   v <- get(nm)

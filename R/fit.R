@@ -13,6 +13,11 @@
 #' @export
 atn_models <- function() {
   eip_control <- list(adapt_delta = 0.95, max_treedepth = 12)
+  # The exponential EIP model is fitted for the SI comparison only, and leaves a
+  # handful of divergent transitions at adapt_delta 0.95 (8 of 8000 at 40 EIP
+  # stages, 6 of 8000 at 30), so it takes smaller steps. The Hill model, which is
+  # the one the simulations draw from, is clean at 0.95 and is left there.
+  eip_exp_control <- list(adapt_delta = 0.995, max_treedepth = 12)
   blocking_control <- list(adapt_delta = 0.999, max_treedepth = 14)
   blocking_key <- c("r_min", "b_max", "s_half_pre", "log_s_half_pre",
                     "s_half_post", "log_s_half_post", "nH_pre", "log_nH_pre",
@@ -27,7 +32,8 @@ atn_models <- function() {
                 "sigma_exp")
     ),
     eip_exponential = list(
-      file = "si_comparison/eip_fit.stan", data = "eip", control = eip_control,
+      file = "si_comparison/eip_fit.stan", data = "eip",
+      control = eip_exp_control,
       key = c("log_eip_excess", "eip_excess", "eip_baseline", "rho", "rho0",
               "r0_frac", "zeta", "log_zeta", "zeta_halflife", "sigma_exp"),
       pairs = c("log_eip_excess", "r0_frac", "log_zeta", "sigma_exp")

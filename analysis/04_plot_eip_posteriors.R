@@ -22,10 +22,18 @@
 #   eip_combined_draws.png, eip_combined_cri.png
 #       rate (left) and mean EIP with data (right), exponential above Hill
 #
+# "Mean EIP" throughout is E[T], the mean of the Erlang-threshold completion
+# time the model implies -- see the section on it below. Before 2026-10-15
+# these panels plotted the time at which a mosquito progressing at the average
+# rate would finish, which is a different quantity and produced a spurious
+# cliff at late exposure times.
+#
 # The data overlay gives, for each experiment and arm, the mean EIP implied
 # by the observed sporozoite prevalence: a Beta-Jeffreys posterior on the
-# prevalence, inverted through the cumulative-rate function of the model at
-# its posterior medians; both ends clipped at the prior's EIP floor.
+# prevalence, converted to a mean EIP by rescaling the speed of the model's
+# fitted rate profile, at its posterior medians, until the model reproduces
+# that prevalence at the dissection time; both ends clipped at the prior's
+# EIP floor.
 #
 # Uses the newest full fit in outputs/fits/, or the one named:
 #   Rscript analysis/04_plot_eip_posteriors.R 20261009_1853
@@ -34,7 +42,6 @@
 devtools::load_all(quiet = TRUE)
 suppressPackageStartupMessages({
   library(rstan)
-  library(lamW)
   library(ggplot2)
   library(dplyr)
   library(patchwork)
@@ -88,6 +95,12 @@ x_min          <- -12
 x_max          <-  12
 x_grid_step    <-   0.1
 
+# How many posterior draws the mean-EIP curves are computed over. See the note
+# in process_model: n_eff is around 3000, so this is thinning redundancy, not
+# discarding information. Inf uses every draw and takes roughly four times as
+# long.
+n_draws_curve  <- 2000L
+
 x_major_breaks <- seq(-14, 14, by = 2)
 x_minor_breaks <- seq(-14, 14, by = 1)
 y_major_breaks <- seq(0, 50, by = 5)
@@ -130,107 +143,165 @@ d       <- readRDS(d_files[[1]])$Delta_r             # Erlang shape
 cat("Erlang shape (EIP stages): ", d, "\n", sep = "")
 x_grid  <- seq(x_min, x_max, by = x_grid_step)
 
-# ==== Model-specific r(x) computation =========================================
+# ==== Mean EIP under a time-varying progression rate ==========================
 
-# Exponential-decay model: exact Lambert-W inversion of the cumulative
-# integrated rate (matches the closed form used by eip_fit.stan).
-compute_r_vec_exp <- function(rho, rho0, zeta, x, d) {
-  A        <- (rho - rho0) / zeta
-  K        <- (rho - rho0) / rho
-  baseline <- d / rho
-  r        <- numeric(length(x))
-  W_floor  <- -1 / exp(1) + 1e-12
+# A mosquito completes the EIP when its accumulated progression G(tau) reaches
+# an Erlang(R, 1) threshold (SI eq:trt_erlang_prob; the same statement the Stan
+# likelihood evaluates). The threshold is random, so the EIP is a random
+# variable, and its mean is
+#
+#     E[T] = int_0^inf Pr(Gamma(R, 1) > G(t)) dt.
+#
+# That is the quantity plotted here, and it is the mean of the distribution the
+# fitted model implies.
+#
+# It is NOT the tau solving G(tau) = R. That is the completion time of a
+# mosquito progressing at exactly the average rate: the hitting time of the mean
+# rather than the mean hitting time. The two coincide only as R -> infinity,
+# where the EIP becomes deterministic. At finite R they separate once exposure
+# is late enough that some mosquitoes have finished and others have not, because
+# the G(tau) = R quantity drops discontinuously to the baseline as soon as
+# exposure follows the average completion time -- its single notional mosquito
+# has already finished -- whereas at R = 30 some 47% of mosquitoes are still
+# mid-sporogony at day 10 and a dose then still delays them.
+#
+# Until 2026-10-15 these panels plotted the G(tau) = R quantity, which produced
+# a near-vertical drop to the baseline at x = the baseline EIP. The fits were
+# never affected: the Stan likelihood works with completion probabilities and
+# never inverts anything. The two definitions agree to within 0.01 d for
+# exposure up to ~6 days after infection, and diverge by at most ~0.7 d beyond
+# that. SI section eip_lengthening still states the superseded claim that the
+# R -> infinity expressions "describe the mean lengthened-EIP durations" at
+# finite R, and its two mean-EIP tables are built on it.
+#
+# With no suppression G(t) = rho * t and the integral returns R / rho exactly,
+# which is baseline_per_draw below.
 
-  for (i in seq_along(x)) {
-    if (x[i] >= 0) {
-      d0 <- rho * x[i]
-      if (d0 >= d) { r[i] <- baseline; next }
-      r0 <- x[i]
-      d1 <- d - d0
-      B  <- (d1 + A) / rho
-      r1 <- B + (1 / zeta) * lambertW0(max(-K * exp(-zeta * B), W_floor))
-      r[i] <- r0 + r1
-    } else {
-      Ax <- A * exp(-zeta * abs(x[i]))
-      Kx <- K * exp(-zeta * abs(x[i]))
-      Bx <- (d + Ax) / rho
-      r[i] <- Bx + (1 / zeta) * lambertW0(max(-Kx * exp(-zeta * Bx), W_floor))
-    }
+# Gauss-Legendre nodes and weights mapped to [0, 1], via Golub-Welsch. The same
+# scheme eip_fit_hill.stan uses, so the R and Stan integrals agree by
+# construction rather than by coincidence.
+gauss_legendre_01 <- function(m) {
+  i <- seq_len(m - 1L)
+  b <- i / sqrt(4 * i^2 - 1)
+  J <- matrix(0, m, m)
+  J[cbind(i, i + 1L)] <- b
+  J[cbind(i + 1L, i)] <- b
+  e <- eigen(J, symmetric = TRUE)
+  o <- order(e$values)
+  list(x = (e$values[o] + 1) / 2, w = (e$vectors[1, o])^2)
+}
+GL16 <- gauss_legendre_01(16L)
+GL32 <- gauss_legendre_01(32L)
+
+# E[T] for a cumulative-progression function G. `rho` is the baseline (maximal)
+# rate, used only to locate a safe upper limit. `brk_extra` gives the interior
+# times at which the integrand is not analytic or turns sharply; the callers
+# supply the moment of exposure (where G' jumps from rho to rho0), the centre of
+# the recovery kernel, and the time by which the kernel is spent.
+#
+# Gauss-Legendre is spectrally accurate on an analytic integrand and merely
+# ordinary across a kink, so the panel edges must line up with the places G is
+# not smooth. For exposure at x >= 0 the rate is the baseline until t = x and
+# suppressed after, and for late exposure that kink falls right inside the
+# Erlang transition where the integrand carries all its mass: integrating
+# straight through it cost about 1e-3 days. Breaking there, and again at the
+# kernel's own bend (which matters only for a near-step kernel, large nH with a
+# short s_half), is what makes 16 nodes per panel enough: the worst error over
+# 300 draws from the widened posterior is then 3.6e-5 days, about 3 seconds of
+# EIP. Checked against adaptive quadrature and a fine Simpson rule; 32 nodes
+# would buy another three orders of magnitude and cost twice the runtime, which
+# is not a trade worth making for a figure.
+mean_eip_from_G <- function(G, rho, d, brk_extra = numeric(0)) {
+  # Integrate out to where the survival term has fallen below about 1e-13.
+  M    <- d + 10 * sqrt(d)
+  t_hi <- M / rho
+  # G' <= rho everywhere, so this iteration approaches the root from below and
+  # contracts. It replaces a root-find at a fraction of the cost.
+  for (k in 1:8) t_hi <- t_hi + (M - G(t_hi)) / rho
+  guard <- 0L
+  while (G(t_hi) < M && guard < 40L) { t_hi <- t_hi * 1.5; guard <- guard + 1L }
+  # The integrand carries all its mass in the Erlang transition, around G(t) = d
+  # with width sqrt(d). Beyond the kernel G is near-linear with slope rho, so the
+  # times bracketing that transition follow from the t_hi solve for free, and
+  # splitting there is what lets 16 nodes per panel suffice.
+  trans <- t_hi - (M - d + c(5, -5) * sqrt(d)) / rho
+  brk <- sort(unique(pmin(pmax(c(0, brk_extra, trans, t_hi), 0), t_hi)))
+  tot <- 0
+  for (i in seq_len(length(brk) - 1L)) {
+    a <- brk[i]; b <- brk[i + 1L]
+    if (b <= a) next
+    tt  <- a + (b - a) * GL16$x
+    tot <- tot + (b - a) * sum(GL16$w * pgamma(G(tt), shape = d, rate = 1,
+                                               lower.tail = FALSE))
   }
-  r[!is.finite(r) | r < baseline] <- baseline
-  r
+  tot
 }
 
-# Hill-decay model: numerical inversion (uniroot) of the cumulative
-# integrated rate, since the Hill J(.) integral does not admit an
-# elementary inverse for general non-integer nH.
-hill_J <- function(x, n) {
+# J(x; n) = int_0^x du / (1 + u^n).
+#
+# This replaces the regularised-incomplete-beta closed form used until
+# 2026-10-15, which carries a prefactor pi / (n sin(pi / n)): that form is valid
+# only for n > 1 and is singular at n = 1 exactly, so it cannot be used now the
+# prior lower bound on nH is 1 rather than exp(0.5).
+#
+# Two pieces, chosen so both integrands are analytic and bounded:
+#   u in [0, min(x, 1)]  the integrand runs between 1/2 and 1; nothing to resolve.
+#   u in [1, x]          substituted u = exp(s), so the (1 + u^n)^-1 decay becomes
+#                        a clean exponential exp(-(n - 1) s) in s. That piece is
+#                        split again where the integrand has died, so the nodes
+#                        are not spent on a numerically zero tail at large n.
+# eip_fit_hill.stan splits [0, 1] at v* = 1/x instead, which is accurate over the
+# small arguments the likelihood sees (x = (tau - Delta)/s_half, at most ~9) but
+# loses digits over the much larger arguments these plots reach.
+hill_J <- function(x, n, gl = GL32) {
   out <- numeric(length(x))
-  pos <- is.finite(x) & x > 0
-  if (any(pos)) {
-    z   <- x[pos]^n / (1 + x[pos]^n)
-    out[pos] <- pi / (n * sin(pi / n)) * pbeta(z, 1/n, 1 - 1/n)
+  ok  <- is.finite(x) & x > 0
+  if (!any(ok)) return(out)
+  xx  <- x[ok]
+  u1  <- pmin(xx, 1)
+  res <- u1 * as.vector((1 / (1 + outer(u1, gl$x)^n)) %*% gl$w)
+  big <- xx > 1
+  if (any(big)) {
+    L  <- log(xx[big])
+    # exp(s) / (1 + exp(n s)), written so neither term can overflow.
+    f  <- function(s) exp((1 - n) * s) / (1 + exp(-n * s))
+    q  <- function(a, b) (b - a) * as.vector(f(outer(b - a, gl$x) + a) %*% gl$w)
+    sc <- if (n > 1.0001) pmin(L, 40 / (n - 1)) else L
+    res[big] <- res[big] + q(0, sc) + q(sc, L)
   }
+  out[ok] <- res
   out
 }
 
-# Cumulative rate S(tau; x) under the Hill model with exposure at x.
-# Handles x >= 0 and x < 0 analogously to compute_r_vec_exp.
-hill_S <- function(tau, x_exp, rho, rho0, s_half, nH) {
-  B <- rho - rho0
-  out <- rho * tau
-  if (x_exp >= 0) {
-    if (tau > x_exp) {
-      out <- out - B * s_half * hill_J((tau - x_exp) / s_half, nH)
-    }
-  } else {
-    ax <- -x_exp
-    out <- out - B * s_half * (
-      hill_J((tau + ax) / s_half, nH) - hill_J(ax / s_half, nH)
-    )
-  }
-  out
-}
-
-compute_r_vec_hill <- function(rho, rho0, s_half, nH, x, d) {
-  baseline <- d / rho
-  r <- numeric(length(x))
-  for (i in seq_along(x)) {
-    # Quick exit: exposure happens after the EIP would have completed at
-    # baseline rate (only for x >= 0). EIP = baseline (no extension).
-    if (x[i] >= 0 && rho * x[i] >= d) {
-      r[i] <- baseline
-      next
-    }
-    # Numerical inversion of S(tau; x[i]) = d.
-    f <- function(tau) hill_S(tau, x[i], rho, rho0, s_half, nH) - d
-    upper <- max(baseline, abs(x[i])) * 5 + 10
-    sol <- tryCatch(
-      uniroot(f, interval = c(1e-3, upper), extendInt = "upX")$root,
-      error = function(e) NA_real_
-    )
-    r[i] <- if (is.finite(sol) && sol >= baseline) sol else baseline
-  }
-  r
-}
-
-# Wrapper: matrix of r values across a list of par draws ----------------
+# Wrapper: matrix of mean-EIP values across a list of par draws ----------------
+# Both models go through the same mean_eip_from_G; they differ only in the
+# cumulative-progression function, which make_G_exp / make_G_hill supply.
 compute_r_matrix_exp <- function(pars, x_grid, d) {
-  n <- length(pars$rho)
+  n   <- length(pars$rho)
   out <- matrix(NA_real_, n, length(x_grid))
   for (k in seq_len(n)) {
-    out[k, ] <- compute_r_vec_exp(pars$rho[k], pars$rho0[k], pars$zeta[k],
-                                  x_grid, d = d)
+    # Exposure, one e-folding time, and spent after about ten.
+    off <- c(0, 1, 10) / pars$zeta[k]
+    for (j in seq_along(x_grid)) {
+      G <- make_G_exp(x_grid[j], pars$rho[k], pars$rho0[k], pars$zeta[k])
+      out[k, j] <- mean_eip_from_G(G, pars$rho[k], d,
+                                   max(0, x_grid[j]) + off)
+    }
   }
   out
 }
 compute_r_matrix_hill <- function(pars, x_grid, d) {
-  n <- length(pars$rho)
+  n   <- length(pars$rho)
   out <- matrix(NA_real_, n, length(x_grid))
   for (k in seq_len(n)) {
-    out[k, ] <- compute_r_vec_hill(pars$rho[k], pars$rho0[k],
-                                   pars$s_half[k], pars$nH[k],
-                                   x_grid, d = d)
+    # Exposure, the half-recovery time, and spent after about six of them.
+    off <- c(0, 1, 6) * pars$s_half[k]
+    for (j in seq_along(x_grid)) {
+      G <- make_G_hill(x_grid[j], pars$rho[k], pars$rho0[k],
+                       pars$s_half[k], pars$nH[k])
+      out[k, j] <- mean_eip_from_G(G, pars$rho[k], d,
+                                   max(0, x_grid[j]) + off)
+    }
   }
   out
 }
@@ -294,58 +365,86 @@ make_G_hill <- function(delta, rho, rho0, s_half, nH) {
   B <- rho - rho0
   if (delta >= 0) {
     function(tau) {
-      sapply(tau, function(t) {
-        if (t <= delta) rho * t
-        else rho * t - B * s_half * hill_J((t - delta) / s_half, nH)
-      })
+      out <- rho * tau
+      i <- tau > delta
+      if (any(i)) {
+        out[i] <- out[i] - B * s_half * hill_J((tau[i] - delta) / s_half, nH)
+      }
+      out
     }
   } else {
     ax <- -delta
     J_lo <- hill_J(ax / s_half, nH)   # constant; recovery already accumulated
                                       # before infection (tau = 0)
     function(tau) {
-      sapply(tau, function(t) {
-        if (t <= 0) rho * t
-        else rho * t - B * s_half *
-                       (hill_J((t + ax) / s_half, nH) - J_lo)
-      })
+      out <- rho * tau
+      i <- tau > 0
+      if (any(i)) {
+        out[i] <- out[i] - B * s_half *
+                           (hill_J((tau[i] + ax) / s_half, nH) - J_lo)
+      }
+      out
     }
   }
 }
 
-# Control arm: rate is rho throughout (no exposure). Closed form,
-# identical for both models.
+# ---- Turning an observed prevalence into a mean EIP --------------------------
+#
+# A dissection gives one number: the share of mosquitoes sporozoite-positive at
+# tau_obs. Under the model that share is F_Gamma(G(tau_obs); R, 1), so the
+# observed prevalence p names the accumulated progression the assay actually
+# saw, s_hat = qgamma(p; R, 1), against the G(tau_obs) the fitted model expects.
+#
+# The overlay reports the mean EIP of the mosquitoes that produced p. We take
+# the fitted model's rate PROFILE -- its full time-varying suppression, not a
+# constant rate -- and rescale its speed by the single factor
+#
+#     k = s_hat / G(tau_obs)
+#
+# so that the rescaled model reproduces the observed prevalence exactly at the
+# dissection time. The mean EIP is then E[T] under k * G. When the data match
+# the model, k = 1 and the overlay point sits on the curve.
+#
+# Until 2026-10-15 these functions instead inverted G(tau) = R deterministically
+# after an ADDITIVE shift, G(tau) = G(tau_obs) + (R - s_hat). That cannot carry
+# over to E[T]: an additive shift leaves the accumulated progression non-zero
+# (indeed negative) at the moment of infection, so there is no coherent
+# trajectory to take the expectation over. Rescaling the rate keeps G(0) = 0 and
+# keeps the suppression shape, and for the control arm it reduces to the exact
+# closed form below.
+#
+# Control arm: no exposure, so the rate really is constant at rho and the
+# observed prevalence implies the constant rate s_hat / tau_obs directly. The
+# mean EIP is then R divided by that rate, exactly -- no quadrature needed,
+# because the EIP is exactly Erlang.
 implied_tau_ctl <- function(p, tau_obs, rho, d) {
   if (!is.finite(p)) return(NA_real_)
   p <- pmax(pmin(p, 1 - 1e-12), 1e-12)
   s_hat <- qgamma(p, shape = d, rate = 1)
-  pmax(tau_obs + (d - s_hat) / rho, 0.1)
+  pmax(d * tau_obs / s_hat, 0.1)
 }
 
-# Treatment arm: numerical inversion of G. Model dispatch via the spec.
-implied_tau_trt_exp <- function(p, delta_val, tau_obs, med, d) {
+# Treatment arm: rescale the fitted rate profile to match the observation, then
+# take E[T] under it. Model dispatch via the spec.
+implied_tau_scaled <- function(G, rho, tau_obs, p, d, brk_extra) {
   if (!is.finite(p)) return(NA_real_)
-  p <- max(min(p, 1 - 1e-12), 1e-12)
-  s_hat  <- qgamma(p, shape = d, rate = 1)
-  G      <- make_G_exp(delta_val, med$rho, med$rho0, med$zeta)
-  target <- G(tau_obs) + (d - s_hat)
-  if (target <= 0) return(0.1)
-  f <- function(tau) G(tau) - target
-  res <- tryCatch(uniroot(f, interval = c(0.01, 200), extendInt = "upX")$root,
-                  error = function(e) NA_real_)
-  max(res, 0.1)
+  p     <- max(min(p, 1 - 1e-12), 1e-12)
+  s_hat <- qgamma(p, shape = d, rate = 1)
+  g_obs <- G(tau_obs)
+  if (!is.finite(g_obs) || g_obs <= 0) return(NA_real_)
+  k  <- s_hat / g_obs
+  Gk <- function(tau) k * G(tau)
+  max(mean_eip_from_G(Gk, k * rho, d, brk_extra), 0.1)
+}
+implied_tau_trt_exp <- function(p, delta_val, tau_obs, med, d) {
+  G <- make_G_exp(delta_val, med$rho, med$rho0, med$zeta)
+  implied_tau_scaled(G, med$rho, tau_obs, p, d,
+                     max(0, delta_val) + c(0, 1, 10) / med$zeta)
 }
 implied_tau_trt_hill <- function(p, delta_val, tau_obs, med, d) {
-  if (!is.finite(p)) return(NA_real_)
-  p <- max(min(p, 1 - 1e-12), 1e-12)
-  s_hat  <- qgamma(p, shape = d, rate = 1)
-  G      <- make_G_hill(delta_val, med$rho, med$rho0, med$s_half, med$nH)
-  target <- G(tau_obs) + (d - s_hat)
-  if (target <= 0) return(0.1)
-  f <- function(tau) G(tau) - target
-  res <- tryCatch(uniroot(f, interval = c(0.01, 200), extendInt = "upX")$root,
-                  error = function(e) NA_real_)
-  max(res, 0.1)
+  G <- make_G_hill(delta_val, med$rho, med$rho0, med$s_half, med$nH)
+  implied_tau_scaled(G, med$rho, tau_obs, p, d,
+                     max(0, delta_val) + c(0, 1, 6) * med$s_half)
 }
 
 # ==== Model specs =============================================================
@@ -457,11 +556,24 @@ process_model <- function(spec, n_draws_to_plot = 100,
   dat  <- readRDS(file.path(fit_dir, paste0(spec$model, "_data.rds")))
   stopifnot(dat$Delta_r == d)
 
-  n_draws <- length(post$rho)
+  # ---- Thin the draws used for the curves ---------------------------------
+  # E[T] costs a quadrature per (draw, x) where the superseded deterministic
+  # quantity cost a root-find, so all 8000 draws would take minutes per model
+  # rather than seconds. n_eff for the kernel parameters is about 3000, so the
+  # chain never carried 8000 independent pieces of information in the first
+  # place: a random n_draws_curve of them gives a visually identical band for a
+  # quarter of the work. Set n_draws_curve to Inf to use every draw.
+  n_draws_all <- length(post$rho)
+  idx_curve   <- if (n_draws_curve < n_draws_all) {
+    sort(sample(n_draws_all, n_draws_curve))
+  } else seq_len(n_draws_all)
+  post    <- lapply(post, function(v) v[idx_curve])
+  n_draws <- length(idx_curve)
 
-  # ---- Posterior r(x) curves ----------------------------------------------
-  cat("[", spec$label, "] computing r(x) over ", n_draws,
-      " posterior draws and ", length(x_grid), " x values...\n", sep = "")
+  # ---- Posterior mean-EIP curves ------------------------------------------
+  cat("[", spec$label, "] computing mean EIP over ", n_draws, " of ",
+      n_draws_all, " posterior draws and ", length(x_grid), " x values...\n",
+      sep = "")
   r_all <- spec$compute_r_matrix(post, x_grid, d)
 
   idx_sub  <- sample(n_draws, n_draws_to_plot)
@@ -476,6 +588,8 @@ process_model <- function(spec, n_draws_to_plot = 100,
   )
 
   # ---- Baseline-EIP per posterior draw ------------------------------------
+  # Same thinned draws as the curves, so the grey and orange bands are built
+  # from one set of mosquitoes rather than two.
   baseline_per_draw <- d / post$rho
 
   df_draws_baseline <- do.call(rbind, lapply(idx_sub, function(k) {

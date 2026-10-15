@@ -10,9 +10,11 @@
 # diagnostics file estimates how long the full fit would take.
 #   Rscript analysis/03_fit_models.R --smoke
 #
-# The EIP models fit an Erlang EIP with ATN_ERLANG_SHAPE stages (default 40, the
-# spor_len of the projections in 07_run_projections.R; the fits of 9 October 2026,
-# outputs/fits/20261009_1853, used 10). The blocking models do not use it.
+# The EIP models fit an Erlang EIP with ATN_ERLANG_SHAPE stages (default 30, which
+# must match the spor_len of 07_run_projections.R, since the kernels fitted here are
+# applied to that Erlang; the note there says why 30). Earlier fits used other
+# shapes: outputs/fits/20261009_1853 used 10 and 20261014_1554_eipR40 used 40.
+# The blocking models do not use it.
 #   ATN_ERLANG_SHAPE=10 Rscript analysis/03_fit_models.R eip_hill
 #
 # Each run writes to outputs/fits/<YYYYMMDD_HHMM>/, with "_eipR<shape>" appended
@@ -44,7 +46,7 @@ unknown <- setdiff(models, names(atn_models()))
 if (length(unknown)) {
   stop("Unknown model(s): ", toString(unknown), call. = FALSE)
 }
-erlang_shape <- as.integer(Sys.getenv("ATN_ERLANG_SHAPE", "40"))
+erlang_shape <- as.integer(Sys.getenv("ATN_ERLANG_SHAPE", "30"))
 if (is.na(erlang_shape) || erlang_shape < 1L) {
   stop("ATN_ERLANG_SHAPE must be a positive whole number.", call. = FALSE)
 }

@@ -321,17 +321,36 @@ retention_override <- if (nzchar(ret_env)) as.numeric(ret_env) else NULL
 # sizes (hence both appear in each history's file name, below).
 #   deltaq   exposure classes spanning atn_window (time since an antimalarial dose)
 #   spor_len Erlang stages for the EIP
-# 20/40 from 2026-10-14: 40 EIP stages put the Erlang EIP spread inside the range
-# implied by the warm-temperature laboratory estimates (Stopard 2023 thesis Ch. 3-4
-# give shapes of 32-43 at 25-30 C; the fitted all-temperature value is 47), where
-# spor_len = 10 was far more dispersed than any published estimate. 40 also resolves
-# the post-infection blocking kernel, which at 10 stages decayed almost entirely
-# within the first stage and was effectively lost for the steeper draws. deltaq = 20
-# halves the exposure conveyor's smearing of time since dose (about -5% of the
-# delivered pre-infection and EIP kernel effect at 10, about -2.7% at 20).
-# ATN_DELTAQ / ATN_SPOR_LEN override both, for timing comparisons against 10/10.
+# The two counts are set independently, because they index different clocks: deltaq
+# measures time since a dose (pharmacological), spor_len progress through sporogony
+# (developmental). They would coincide numerically only because atn_window and the
+# EIP are both about 10 days, which is not a structural fact.
+#
+# spor_len = 30 from 2026-10-14, for both the simulation and the Stan fit that
+# supplies its kernels. The laboratory assays were held at 27 C after the infectious
+# blood meal (Probst et al. 2025 Nature; Paton et al. 2019 Nature give 27 C +- 2),
+# and Stopard et al. 2021's 27 C quantiles (EIP10/50/90 = 8.2/10.2/13.0 d) imply an
+# Erlang shape of about 30. That is at the lower end of the published range (the
+# 2023 thesis gives 32-43 at 25-30 C and an all-temperature fitted value of 47), and
+# deliberately so: fluctuating temperature, second blood meals and body-size
+# variation all widen the EIP in the field, so the laboratory shape is an upper
+# bound on field sharpness and the simulation should not be sharper than the assay.
+# spor_len = 10, the former value, was far more dispersed than any published
+# estimate, and its fitted baseline EIP of 9.0 [8.3, 9.8] d excludes the 27 C
+# literature value of 10.2 d, which 30 stages covers at 10.0 [9.5, 10.4].
+# Cost of 30 over 40, accepted: spor_len also sets the grid for the post-infection
+# blocking kernel, whose stage-mean error widens from -2..+4% at 40 to -12..+5%.
+#
+# deltaq = 20 halves the exposure conveyor's smearing of time since dose (about -5%
+# of the delivered pre-infection and EIP kernel effect at 10, about -2.7% at 20,
+# -1.9% at 30; conservative at every value). The EIP suppression is ~85% gone by 3
+# days and ~95% by 4, so the first four days are what need resolving: deltaq = 10
+# covers them with about 4 classes, deltaq = 20 with about 8. Run time does not
+# constrain either count -- the adult ODE is ~0.3% of the work, and 20/40 against
+# 10/10 added under 1% to the 2026-10-14 timing benchmark.
+# ATN_DELTAQ / ATN_SPOR_LEN override both, for timing and sensitivity comparisons.
 deltaq_use   <- as.integer(Sys.getenv("ATN_DELTAQ", "20"))
-spor_len_use <- as.integer(Sys.getenv("ATN_SPOR_LEN", "40"))
+spor_len_use <- as.integer(Sys.getenv("ATN_SPOR_LEN", "30"))
 for (nm in c("deltaq_use", "spor_len_use")) {
   v <- get(nm)
   if (is.na(v) || v < 1L) {
@@ -501,6 +520,23 @@ if (max(draws_tab$itn_draw) > min(vapply(itn_draws, function(x) max(x$draw), num
 # the mixed-delivery arm are ATNs.
 p_a_of_arm <- c(atn = "p_a_atn", pyr_atn = "p_a_aitn", pyr_cfp_atn = "p_a_aitn",
                 pyr_cfp_mc_atn_cd = "p_a_atn")
+
+# The EIP kernels in the draws table were fitted against an Erlang of a particular
+# number of stages, and describe no other, so the table's stage count must be the
+# one the simulations run at. Older tables predate the column and are rejected
+# rather than assumed.
+if (is.null(draws_tab$erlang_shape)) {
+  stop("The draws table has no erlang_shape column. Rebuild it with ",
+       "analysis/06_make_draws.R.", call. = FALSE)
+}
+if (length(unique(draws_tab$erlang_shape)) != 1L ||
+    draws_tab$erlang_shape[[1]] != spor_len_use) {
+  stop(sprintf(paste("The draws table was built from EIP kernels fitted at %s stages,",
+                     "but spor_len is %d. Refit the EIP model at %d stages, or set",
+                     "ATN_SPOR_LEN to match the table."),
+               toString(unique(draws_tab$erlang_shape)), spor_len_use, spor_len_use),
+       call. = FALSE)
+}
 
 # The inputs of simulation i (row i of the draws table).
 row_inputs <- function(i) {

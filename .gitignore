@@ -37,3 +37,8 @@ hipercow/
 
 # The draws table for the projections (analysis/06_make_draws.R): public.
 !inst/extdata/projection_draws.csv
+
+# The calibrated baseline EIRs (analysis/07a, collected by 07b): nine model outputs, one per
+# region, with the versions they depend on. Tracked because the cluster runs a frozen copy of
+# the code at a commit, so it can only read what has been committed.
+!inst/extdata/calibrated_eir.csv

@@ -65,6 +65,10 @@
 #                       in settings.rds (deltaq_use, spor_len_use); 10 and 10 give
 #                       the earlier configuration. Keep them equal unless you also
 #                       change atn_window or dem -- see the note above deltaq_use
+#     CALIBRATED_EIR_FILE  the baseline EIRs to use (default inst/extdata/
+#                       calibrated_eir.csv, written by 07b from 07a's calibrations);
+#                       "none" keeps the site file's own. The run stops if the table was
+#                       fitted with other compartment counts or net retention
 #     SWEEP_CORES, NET_RETENTION_DAYS, OUT_SUFFIX, ATN_FORK_PATH, ATNET_CODE_DIR,
 #     ATNET_VERSION: see below
 #   A "realisation" is simulation i: row i of the draws table, with seed
@@ -415,6 +419,60 @@ message(sprintf("OUT_DIR: %s", OUT_DIR))
 retention_time <- if (!is.null(retention_override)) retention_override else retention_years * 365
 message(sprintf("Net retention = %.1f days (%s)", retention_time,
                 if (is.null(retention_override)) sprintf("%g years", retention_years) else "manual override"))
+
+# Baseline EIRs. The site file's were fitted for upstream malariasimulation, which differs
+# from the fork in its EIP and, here, in net retention, so run at them the history misses
+# the prevalence they were fitted to. 07a_calibrate_eir.R refits them for this model and
+# 07b_collect_calibrated_eir.R writes inst/extdata/calibrated_eir.csv; those EIRs replace the
+# site file's for every region, in the history and in every arm, so all arms share one baseline.
+# An EIR is only valid for the model it was fitted with, so the run stops if the table's
+# compartment counts or net retention are not this run's: a different configuration needs its
+# own calibration. CALIBRATED_EIR_FILE names another table; "none" keeps the site file's EIRs,
+# which is what 07a uses, since it is finding new ones.
+calibrated_eir_file <- Sys.getenv("CALIBRATED_EIR_FILE",
+                                  file.path(CODE_PATH, "inst", "extdata", "calibrated_eir.csv"))
+calibrated_eir_md5  <- NA_character_
+if (!identical(calibrated_eir_file, "none")) {
+  if (!file.exists(calibrated_eir_file)) {
+    stop(calibrated_eir_file, " does not exist. Run 07a_calibrate_eir.R and ",
+         "07b_collect_calibrated_eir.R, or set CALIBRATED_EIR_FILE=none to use the site file's ",
+         "EIRs.", call. = FALSE)
+  }
+  ce <- read.csv(calibrated_eir_file, stringsAsFactors = FALSE)
+  one <- function(col) {
+    v <- unique(ce[[col]])
+    if (length(v) != 1L) stop(calibrated_eir_file, " has more than one ", col, ": ", toString(v),
+                              call. = FALSE)
+    v
+  }
+  if (any(ce$ended != "Success")) {
+    stop(calibrated_eir_file, ": a calibration did not end in Success (",
+         toString(ce$region[ce$ended != "Success"]), ").", call. = FALSE)
+  }
+  for (chk in list(list("deltaq", deltaq_use), list("spor_len", spor_len_use),
+                   list("retention_days", retention_time))) {
+    if (!isTRUE(all.equal(one(chk[[1]]), chk[[2]], tolerance = 1e-8))) {
+      stop(calibrated_eir_file, " was fitted with ", chk[[1]], " = ", one(chk[[1]]),
+           " but this run has ", chk[[1]], " = ", chk[[2]], ". Calibrate this configuration ",
+           "(07a, then 07b), or set CALIBRATED_EIR_FILE=none to use the site file's EIRs.",
+           call. = FALSE)
+    }
+  }
+  hit <- match(iconv(site_obj$eir$name_1, to = "ASCII//TRANSLIT"), ce$region)
+  if (anyNA(hit)) {
+    stop(calibrated_eir_file, " has no EIR for ",
+         toString(site_obj$eir$name_1[is.na(hit)]), call. = FALSE)
+  }
+  message(sprintf("Baseline EIRs from %s (fitted %d-%d, fork %s): %s",
+                  basename(calibrated_eir_file), one("fit_first_year"), one("fit_last_year"),
+                  one("fork_version"),
+                  paste(sprintf("%s %.3g -> %.3g", site_obj$eir$name_1, site_obj$eir$eir,
+                                ce$calibrated_eir[hit]), collapse = "; ")))
+  site_obj$eir$eir   <- ce$calibrated_eir[hit]
+  calibrated_eir_md5 <- unname(tools::md5sum(calibrated_eir_file))
+} else {
+  message("Baseline EIRs: the site file's own (CALIBRATED_EIR_FILE = none)")
+}
 
 # IRS efficacy must wane with time since spraying. malariasimulation keeps each
 # person's last spray date for life, so a slope of the wrong sign drives an effect
@@ -1076,6 +1134,7 @@ run_settings <- list(
   site_file_md5    = site_file_md5,
   code_md5         = code_md5,
   draws_md5        = unname(tools::md5sum(DRAWS_FILE)),
+  calibrated_eir_md5 = calibrated_eir_md5,   # NA when the site file's own EIRs are used
   itn_draws_source = itn_draws_source()[c("repo", "commit", "md5")],
   human_pop        = human_pop,
   retention_time   = retention_time,

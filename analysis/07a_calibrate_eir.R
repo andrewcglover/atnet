@@ -33,6 +33,7 @@
 #                   summary function, with no calibration.
 #   CALI_OUT        output folder (default outputs/calibration/<date>_dq<>_sl<>).
 # Writes <CALI_OUT>/<region>.rds. Run with the working directory at the package root.
+# Afterwards, 07b_collect_calibrated_eir.R <folder> writes the tracked table that 07 reads.
 #
 # ORDER MATTERS: cali imports malariasimulation, so loading cali first would load whatever
 # is installed under that name. 07 loads the fork first (ATN_FORK_PATH or an installed
@@ -48,7 +49,9 @@ if (utils::packageVersion("site") != "1.0.10") {
        "needs 1.0.10. Set ATN_SITE_LIB to a library holding it.", call. = FALSE)
 }
 
-Sys.setenv(SWEEP_REGIONS = args[[1]])
+# CALIBRATED_EIR_FILE = none: 07 would otherwise replace the site file's EIRs with a table
+# this script is about to replace, and stop if that table was fitted for another model.
+Sys.setenv(SWEEP_REGIONS = args[[1]], CALIBRATED_EIR_FILE = "none")
 options(country_test_mode = TRUE)
 source("analysis/07_run_projections.R")
 stopifnot(length(sweep_regions) == 1L)

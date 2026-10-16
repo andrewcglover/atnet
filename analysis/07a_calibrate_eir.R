@@ -21,9 +21,9 @@
 # stops it after setup.
 #
 # One region per process, so regions run side by side:
-#   ATN_FORK_PATH=<fork> ATN_SITE_LIB=<library holding site 1.0.10> \
-#     Rscript analysis/07a_calibrate_eir.R Mopti
+#   ATN_FORK_PATH=<fork> Rscript analysis/07a_calibrate_eir.R Mopti
 # Optional environment variables:
+#   ATNET_SITE_LIB  library holding site 1.0.10 (default: the one 08's pre-flight uses).
 #   CALI_POP        human populations to try, in order (default 10000,100000). cali moves
 #                   to the next when a run eliminates malaria, then raises the EIR.
 #   CALI_VALIDATE   1 (default) re-runs the history at the calibrated EIR with HUMAN_POP
@@ -42,11 +42,12 @@
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) != 1L) stop("Give exactly one region, e.g. Rscript analysis/07a_calibrate_eir.R Mopti")
 
-site_lib <- Sys.getenv("ATN_SITE_LIB", "")
+# The library holding site 1.0.10: the same setting, and the same default, as 08's pre-flight.
+site_lib <- Sys.getenv("ATNET_SITE_LIB", "C:/Users/ag4218/AppData/Local/R/atnet-lib/4.4")
 if (nzchar(site_lib)) .libPaths(c(normalizePath(site_lib), .libPaths()))
 if (utils::packageVersion("site") != "1.0.10") {
   stop("site ", utils::packageVersion("site"), " is first on the library path; the Mali site file ",
-       "needs 1.0.10. Set ATN_SITE_LIB to a library holding it.", call. = FALSE)
+       "needs 1.0.10. Set ATNET_SITE_LIB to a library holding it.", call. = FALSE)
 }
 
 # CALIBRATED_EIR_FILE = none: 07 would otherwise replace the site file's EIRs with a table

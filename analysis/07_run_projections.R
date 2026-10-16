@@ -409,8 +409,12 @@ code_md5 <- local({
   writeLines(unlist(lapply(code, function(x) deparse(parse(x, keep.source = FALSE, encoding = "UTF-8")))), f)
   unname(tools::md5sum(f))
 })
-message(sprintf("Realisations (draws-table rows): %d-%d (%d) | seeds %d-%d | cores: %d", draw_bounds[1], draw_bounds[2],
-                length(draw_rows), SEED_BASE + draw_bounds[1], SEED_BASE + draw_bounds[2], N_CORES))
+if (STAGE == "histories") {
+  message(sprintf("Realisations: none (histories stage) | history seed %d | cores: %d", SEED_BASE, N_CORES))
+} else {
+  message(sprintf("Realisations (draws-table rows): %d-%d (%d) | seeds %d-%d | cores: %d", draw_bounds[1], draw_bounds[2],
+                  length(draw_rows), SEED_BASE + draw_bounds[1], SEED_BASE + draw_bounds[2], N_CORES))
+}
 message(sprintf("Antimalarial half-life: %s | arms: %s",
                 if (is.null(hl_fixed_years)) "drawn per realisation" else sprintf("fixed at %g yr", hl_fixed_years),
                 paste(arms, collapse = ",")))

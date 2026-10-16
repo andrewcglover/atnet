@@ -578,15 +578,15 @@ row_inputs <- function(i) {
   )
 }
 
-render_overrides <- list(
-  human_population                      = human_pop,
-  prevalence_rendering_min_ages         = 2 * 365,
-  prevalence_rendering_max_ages         = 10 * 365,
-  age_group_rendering_min_ages          = 2 * 365,
-  age_group_rendering_max_ages          = 10 * 365,
-  clinical_incidence_rendering_min_ages = 0,
-  clinical_incidence_rendering_max_ages = 100 * 365
-)
+# Which age bands are rendered is not set here, and cannot be: site 1.0.10's
+# site_parameters() applies these overrides first and then replaces every rendering age
+# with its own layout, so any such setting is overwritten. The layout it imposes, which is
+# what the outputs carry and what projection_results.R reads, is
+#   age groups, clinical and severe incidence   0-1824, 1825-5474, 5475-36499 days
+#   prevalence                                  365-36499 and 730-3649 days
+# (the upper bound of the 2-10 year band is 3649, not 3650: the age ranges are inclusive).
+# Settings for these were removed on 2026-10-16 after being found to have no effect.
+population_overrides <- list(human_population = human_pop)
 form_overrides <- list(use_eip_hill = TRUE, use_bompard = TRUE)
 
 # ---------------------------------------------------------------------
@@ -857,7 +857,7 @@ build_params <- function(region, arm, draw) {
     # deltaq and spor_len are the same in every segment and arm (ATN or not), so
     # that a saved state can be resumed by any arm; without an antimalarial the
     # extra exposure classes stay empty. Both set array sizes at construction.
-    overrides     = c(render_overrides, form_overrides,
+    overrides     = c(population_overrides, form_overrides,
                       list(deltaq = deltaq_use, spor_len = spor_len_use),
                       atn_overrides, list(ode_max_steps = 1e8, a_tol = 0.1))
   )
@@ -1157,7 +1157,7 @@ parallel::clusterExport(cl, c(
   "n_steps", "n_future_years", "draws_tab", "itn_draws", "net_of_arm",
   "net_of_site_type", "p_a_of_arm", "hl_fixed_years", "SEED_BASE",
   "cd_cov", "campaign_cov", "cd_interval", "retention_time", "deltaq_use", "spor_len_use",
-  "render_overrides", "form_overrides", "human_pop", "future_interventions",
+  "population_overrides", "form_overrides", "human_pop", "future_interventions",
   "COUNTRY_ISO", "HISTORY_DIR", "JOB_DIR", "FAILED_DIR", "END_DAY", "keep_columns",
   "fork_version", "atnet_version", "sim_identity", "code_md5", "site_file_md5", "conan_id"
 ))

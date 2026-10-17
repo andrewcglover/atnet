@@ -478,6 +478,42 @@ if (!identical(calibrated_eir_file, "none")) {
   message("Baseline EIRs: the site file's own (CALIBRATED_EIR_FILE = none)")
 }
 
+# Yearly ITN distributions, 2000-2024. The site file's itn_input_dist (share of people given a
+# net on 1 January) were fitted with netz to its net-use estimates under its own retention of
+# about 2014 days; with the shorter retention above they leave simulated use far below those
+# estimates. 06b_fit_itn_distribution.R refits them for this retention (same method, still
+# 1 January, capped at 1) into data_private/itn_distribution/, which replace them here. Net
+# efficacy is unchanged (the site file's, or the realisation's ITN draw from branch_year). The
+# table is derived from the site file, so it stays in data_private/ and is read from the
+# package root, not from the frozen code. ITN_DIST_FILE names another table; "none" keeps the
+# site file's distributions.
+itn_dist_file <- Sys.getenv("ITN_DIST_FILE", file.path(ATNET_PATH, "data_private", "itn_distribution",
+                                                       sprintf("itn_input_dist_ret%d.csv", round(retention_time))))
+itn_dist     <- NULL
+itn_dist_md5 <- NA_character_
+if (!identical(itn_dist_file, "none")) {
+  if (!file.exists(itn_dist_file)) {
+    stop(itn_dist_file, " does not exist. Run analysis/06b_fit_itn_distribution.R, or set ",
+         "ITN_DIST_FILE=none to use the site file's distributions.", call. = FALSE)
+  }
+  itn_dist <- read.csv(itn_dist_file, stringsAsFactors = FALSE)
+  if (!isTRUE(all.equal(unique(itn_dist$retention_days), retention_time))) {
+    stop(itn_dist_file, " was fitted for a retention of ", toString(unique(itn_dist$retention_days)),
+         " days, but this run uses ", retention_time, ". Rerun 06b with NET_RETENTION_DAYS.", call. = FALSE)
+  }
+  if (!identical(unique(itn_dist$site_file_md5), site_file_md5)) {
+    stop(itn_dist_file, " was fitted to a different site file. Rerun 06b.", call. = FALSE)
+  }
+  need <- paste(iconv(site_obj$interventions$name_1, to = "ASCII//TRANSLIT"), site_obj$interventions$year)
+  miss <- setdiff(need, paste(itn_dist$region, itn_dist$year))
+  if (length(miss)) stop(itn_dist_file, " has no distribution for: ", toString(head(miss, 5)), call. = FALSE)
+  itn_dist_md5 <- unname(tools::md5sum(itn_dist_file))
+  message(sprintf("ITN distributions 2000-2024 from %s (refitted for %g-day retention; %d region-years capped at 1)",
+                  basename(itn_dist_file), retention_time, sum(itn_dist$capped)))
+} else {
+  message("ITN distributions 2000-2024: the site file's own (ITN_DIST_FILE = none)")
+}
+
 # IRS efficacy must wane with time since spraying. malariasimulation keeps each
 # person's last spray date for life, so a slope of the wrong sign drives an effect
 # to 0 or 1 for good, years after the product was last used. Some fitted slopes in
@@ -754,6 +790,11 @@ message(sprintf("Peak rainfall: day %g-%g by region, national median day %g (%s)
 # (from the same resistance table as the future nets); earlier nets, and all nets
 # when inp is NULL (the shared history), keep the site file's values.
 build_past_schedule <- function(idf, region, inp = NULL) {
+  # Distributions refitted for this run's retention (itn_dist, above), if in use.
+  if (!is.null(itn_dist)) {
+    k <- itn_dist[itn_dist$region == iconv(region, to = "ASCII//TRANSLIT"), , drop = FALSE]
+    idf$itn_input_dist <- k$coverage[match(idf$year, k$year)]
+  }
   pd <- idf[!is.na(idf$itn_input_dist) & idf$itn_input_dist > 0, ]
   if (nrow(pd) == 0L) return(NULL)
   sch <- list(
@@ -1139,6 +1180,7 @@ run_settings <- list(
   code_md5         = code_md5,
   draws_md5        = unname(tools::md5sum(DRAWS_FILE)),
   calibrated_eir_md5 = calibrated_eir_md5,   # NA when the site file's own EIRs are used
+  itn_dist_md5     = itn_dist_md5,         # NA when the site file's own distributions are used
   itn_draws_source = itn_draws_source()[c("repo", "commit", "md5")],
   human_pop        = human_pop,
   retention_time   = retention_time,
@@ -1213,7 +1255,7 @@ parallel::clusterEvalQ(cl, {
 })
 parallel::clusterExport(cl, c(
   "build_params", "build_past_schedule", "build_future_schedule", "net_draw",
-  "row_inputs", "annotate", "trim_columns", "region_tag", "history_file", "job_file",
+  "row_inputs", "annotate", "trim_columns", "region_tag", "history_file", "job_file", "itn_dist",
   "save_whole", "minutes_since", "run_history", "run_row", "run_job", "too_late", "stop_by",
   "site_obj", "regions", "arms", "start_year", "hist_last", "future_yr0",
   "future_start_day", "history_end_day", "pre_end_day", "branch_year", "future_campaign_days",

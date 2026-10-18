@@ -253,6 +253,36 @@ if (!is.null(hl_fixed_years) && !(is.finite(hl_fixed_years) && hl_fixed_years > 
 hl_tag <- if (is.null(hl_fixed_years)) "drawn" else
   gsub("\\.", "p", format(hl_fixed_years, trim = TRUE))  # 2.5 -> "2p5", 5 -> "5"
 
+# Sensitivity settings for the contact probabilities and the mechanism (all ATN-only, so
+# they leave the history and the arms without an antimalarial untouched).
+#   OMEGA_QUANTILE  hold omega_atn, P(net contact | repelled), at this quantile of its prior
+#   P_A_QUANTILE    hold p_A, P(antimalarial exposure | net contact), at this quantile; both
+#                   net types move together, as they do in the draws table
+#   ATN_MECHANISM   "both" (default), "blocking" (no EIP lengthening) or "eip" (no blocking)
+# Unset = each realisation's drawn value, which is the main analysis.
+read_quantile <- function(v) {
+  s <- Sys.getenv(v, "")
+  if (!nzchar(s)) return(NULL)
+  q <- suppressWarnings(as.numeric(s))
+  if (is.na(q) || q <= 0 || q >= 1) {
+    stop(v, " must be a quantile strictly between 0 and 1, not '", s, "'.", call. = FALSE)
+  }
+  q
+}
+omega_quantile <- read_quantile("OMEGA_QUANTILE")
+p_a_quantile   <- read_quantile("P_A_QUANTILE")
+atn_mechanism  <- tolower(Sys.getenv("ATN_MECHANISM", "both"))
+if (!atn_mechanism %in% c("both", "blocking", "eip")) {
+  stop("ATN_MECHANISM must be 'both', 'blocking' or 'eip', not '", atn_mechanism, "'.",
+       call. = FALSE)
+}
+# The priors these quantiles are taken from are the ones the draws table was built with.
+.pri <- projection_priors()
+omega_fixed <- if (is.null(omega_quantile)) NULL else
+  qbeta(omega_quantile, .pri$omega_atn$shape1, .pri$omega_atn$shape2)
+p_a_fixed <- if (is.null(p_a_quantile)) NULL else
+  vapply(.pri$p_a, function(b) qbeta(p_a_quantile, b$shape1, b$shape2), numeric(1))
+
 # OUT_SUFFIX: extra tag appended to the results folder name, e.g. for retention
 # sweeps or add-on arm runs. Nothing in it is ever overwritten.
 out_extra_suffix <- Sys.getenv("OUT_SUFFIX", "")
@@ -414,6 +444,16 @@ if (STAGE == "histories") {
 } else {
   message(sprintf("Realisations (draws-table rows): %d-%d (%d) | seeds %d-%d | cores: %d", draw_bounds[1], draw_bounds[2],
                   length(draw_rows), SEED_BASE + draw_bounds[1], SEED_BASE + draw_bounds[2], N_CORES))
+}
+if (!is.null(omega_quantile) || !is.null(p_a_quantile) || atn_mechanism != "both") {
+  message(sprintf("Sensitivity run | omega: %s | p_A: %s | mechanism: %s",
+                  if (is.null(omega_quantile)) "drawn" else
+                    sprintf("%.4g (quantile %g)", omega_fixed, omega_quantile),
+                  if (is.null(p_a_quantile)) "drawn" else
+                    sprintf("ATN %.4g, AITN %.4g (quantile %g)", p_a_fixed[["atn"]],
+                            p_a_fixed[["aitn"]], p_a_quantile),
+                  switch(atn_mechanism, both = "both", blocking = "blocking only (no EIP lengthening)",
+                         eip = "EIP lengthening only (no blocking)")))
 }
 message(sprintf("Antimalarial half-life: %s | arms: %s",
                 if (is.null(hl_fixed_years)) "drawn per realisation" else sprintf("fixed at %g yr", hl_fixed_years),
@@ -654,10 +694,20 @@ if (length(unique(draws_tab$erlang_shape)) != 1L ||
        call. = FALSE)
 }
 
-# The inputs of simulation i (row i of the draws table).
+# The inputs of simulation i (row i of the draws table), with the sensitivity settings
+# applied: OMEGA_QUANTILE and P_A_QUANTILE hold a contact probability at that quantile of
+# its prior in every realisation (so 0.025, 0.5 and 0.975 sweep its 95% range), and
+# ATN_MECHANISM keeps only one mechanism of the antimalarial. Everything else still varies
+# per realisation, so these runs pair with the main run realisation by realisation.
 row_inputs <- function(i) {
   d <- draws_tab[i, ]
   hl_years <- if (is.null(hl_fixed_years)) d$half_life_atn_years else hl_fixed_years
+  if (!is.null(omega_quantile)) d$omega_atn <- omega_fixed
+  if (!is.null(p_a_quantile)) { d$p_a_atn <- p_a_fixed[["atn"]]; d$p_a_aitn <- p_a_fixed[["aitn"]] }
+  # The fork's no-antimalarial defaults: rho_frac 1 is no EIP lengthening, B_max_post 0 no
+  # blocking (pre-infection, concurrent and post-infection alike).
+  if (atn_mechanism == "blocking") d$rho_frac <- 1
+  if (atn_mechanism == "eip") d$B_max_post <- 0
   list(
     kern = list(
       s_half_eip  = d$s_half_eip,
@@ -1187,6 +1237,11 @@ run_settings <- list(
   campaign_cov     = campaign_cov,
   cd_floor_frac    = cd_floor_frac,
   hl_fixed_years   = hl_fixed_years,   # NULL = each realisation's drawn half-life
+  omega_quantile   = omega_quantile,   # NULL = drawn per realisation
+  omega_fixed      = omega_fixed,
+  p_a_quantile     = p_a_quantile,     # NULL = drawn per realisation
+  p_a_fixed        = p_a_fixed,
+  atn_mechanism    = atn_mechanism,    # "both", "blocking" or "eip"
   arms             = arms,
   n_steps          = n_steps,
   deltaq_use       = deltaq_use,
@@ -1262,6 +1317,7 @@ parallel::clusterExport(cl, c(
   "n_steps", "n_future_years", "draws_tab", "itn_draws", "net_of_arm",
   "net_of_site_type", "p_a_of_arm", "hl_fixed_years", "SEED_BASE",
   "cd_cov", "campaign_cov", "cd_interval", "retention_time", "deltaq_use", "spor_len_use",
+  "omega_quantile", "omega_fixed", "p_a_quantile", "p_a_fixed", "atn_mechanism",
   "population_overrides", "form_overrides", "human_pop", "future_interventions",
   "COUNTRY_ISO", "HISTORY_DIR", "JOB_DIR", "FAILED_DIR", "END_DAY", "keep_columns",
   "fork_version", "atnet_version", "sim_identity", "code_md5", "site_file_md5", "conan_id"

@@ -47,7 +47,30 @@ ATNET_CODE <- c("analysis/07_run_projections.R", "R", "DESCRIPTION", "NAMESPACE"
 FORK_CODE  <- c("R", "src", "DESCRIPTION", "NAMESPACE", "inst")
 # 07's settings that a batch may set (see 07's header).
 BATCH_SETTINGS <- c("OUT_SUFFIX", "HUMAN_POP", "END_DAY", "HISTORY_DIR", "ANTIMAL_HL_YEARS",
-                    "SWEEP_ARMS", "NET_RETENTION_DAYS", "ATN_DELTAQ", "ATN_SPOR_LEN")
+                    "SWEEP_ARMS", "NET_RETENTION_DAYS", "ATN_DELTAQ", "ATN_SPOR_LEN",
+                    "OMEGA_QUANTILE", "P_A_QUANTILE", "ATN_MECHANISM")
+
+# Nodes to keep work off, comma separated (HIPERCOW_EXCLUDE_NODES; "" for none). A node that
+# cannot start work fails in seconds and so is free again at once, which makes the scheduler
+# prefer it: one broken node will otherwise take a job from every submission. 2026-10-17:
+# wpia-029 failed two jobs with "the trust relationship between this workstation and the
+# primary domain failed". Remove it from this list once DIDE have repaired the node.
+EXCLUDE_NODES <- trimws(strsplit(Sys.getenv("HIPERCOW_EXCLUDE_NODES", "wpia-029"), ",")[[1]])
+EXCLUDE_NODES <- EXCLUDE_NODES[nzchar(EXCLUDE_NODES)]
+
+# The nodes a task may run on: every node of the cluster but those. NULL = let hipercow choose
+# (no exclusions wanted, or the node list could not be read).
+usable_nodes <- function() {
+  if (!length(EXCLUDE_NODES)) return(NULL)
+  all <- tryCatch(hipercow::hipercow_cluster_info()$resources$nodes, error = function(e) NULL)
+  if (is.null(all)) {
+    message("Note: could not read the cluster's node list; not excluding ", toString(EXCLUDE_NODES))
+    return(NULL)
+  }
+  keep <- setdiff(all, EXCLUDE_NODES)
+  if (!length(keep)) stop("Excluding ", toString(EXCLUDE_NODES), " would leave no nodes.", call. = FALSE)
+  keep
+}
 
 git <- function(dir, ...) {
   out <- suppressWarnings(system2("git", c("-C", shQuote(dir), ...), stdout = TRUE, stderr = TRUE))
@@ -251,11 +274,13 @@ submit_tasks <- function(b, tasks, name) {
   run_env <- c(b$settings, ATNET_CODE_DIR = b$snapshot, ATNET_VERSION = b$atnet_version)
   script  <- file.path(b$snapshot, "analysis", "07_run_projections.R")
   dir.create(b$out_dir, recursive = TRUE, showWarnings = FALSE)
+  nodes <- usable_nodes()
+  if (!is.null(nodes)) message("Keeping work off: ", toString(EXCLUDE_NODES))
   for (k in unique(tasks$cores)) {
     data <- tasks[tasks$cores == k, , drop = FALSE]
     bundle <- eval(bquote(hipercow::task_create_bulk_expr(
       .(CLUSTER_TASK), data = data, bundle_name = .(paste0(name, "_", k, "cores")),
-      resources = hipercow::hipercow_resources(cores = .(k)))))
+      resources = hipercow::hipercow_resources(cores = .(k), requested_nodes = .(nodes)))))
     rec <- cbind(task = bundle$ids, bundle = bundle$name, data, submitted = Sys.time(),
                  snapshot = b$snapshot, atnet_version = b$atnet_version, stringsAsFactors = FALSE)
     saveRDS(rbind(read_submissions(b$out_dir), rec), submissions_file(b$out_dir))

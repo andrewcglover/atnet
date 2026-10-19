@@ -14,14 +14,25 @@ test_that("the projection priors give the summaries in the SI priors table", {
   pr <- projection_priors()
   q <- c(0.025, 0.5, 0.975)
   expect_equal(round(qbeta(q, pr$omega_atn$shape1, pr$omega_atn$shape2), 2),
-               c(0.80, 0.91, 0.97))
-  expect_equal(round(qbeta(q, pr$p_a$atn$shape1, pr$p_a$atn$shape2), 3),
-               c(0.800, 0.950, 0.996))
+               c(0.88, 0.95, 0.99))
+  expect_equal(round(qbeta(q, pr$p_a$atn$shape1, pr$p_a$atn$shape2), 2),
+               c(0.88, 0.97, 1.00))
   expect_equal(round(qbeta(q, pr$p_a$aitn$shape1, pr$p_a$aitn$shape2), 2),
                c(0.70, 0.90, 0.99))
-  expect_equal(round(qgamma(q, shape = pr$half_life_atn_years$shape,
-                            scale = pr$half_life_atn_years$scale), 2),
-               c(1.00, 2.50, 5.04))
+  expect_equal(round(qlnorm(q, meanlog = pr$half_life_atn_years$meanlog,
+                            sdlog = pr$half_life_atn_years$sdlog), 2),
+               c(2.00, 3.16, 5.00))
+})
+
+test_that("each prior's value is its recorded quantile of that prior", {
+  d <- withr::with_seed(4, draw_antimalarial_inputs(eip_fake, tra_fake, 100))
+  pr <- projection_priors()
+  expect_equal(pbeta(d$omega_atn, pr$omega_atn$shape1, pr$omega_atn$shape2),
+               d$omega_quantile)
+  expect_equal(plnorm(d$half_life_atn_years,
+                      meanlog = pr$half_life_atn_years$meanlog,
+                      sdlog = pr$half_life_atn_years$sdlog),
+               d$half_life_quantile)
 })
 
 test_that("each row keeps whole iterations, sampled without replacement", {

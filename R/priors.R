@@ -191,24 +191,49 @@ write_priors_json <- function(path, priors = atn_priors()) {
 #'
 #' The three inputs of the transmission model that the assays do not inform,
 #' as in the priors table of the SI (uncertainty and sensitivity analysis):
-#' * `omega_atn` ~ Beta(41.8, 4.65), the probability that a repelled mosquito
-#'   contacts the net (median 0.91, 95% within 0.80 to 0.97);
-#' * `p_a` ~ Beta(19.11, 1.30) for ATNs (median 0.95, 95% within 0.80 to
-#'   0.996) and Beta(14.85, 1.93) for AITNs (median 0.90, 95% within 0.70 to
+#' * `omega_atn` ~ Beta(62.61, 3.61), the probability that a repelled mosquito
+#'   contacts the net (median 0.95, 95% within 0.88 to 0.986);
+#' * `p_a` ~ Beta(34.47, 1.37) for ATNs (median 0.97, 95% within 0.88 to
+#'   0.998) and Beta(14.85, 1.93) for AITNs (median 0.90, 95% within 0.70 to
 #'   0.99), the probability that a mosquito contacting the net is exposed to
 #'   the antimalarial;
-#' * `half_life_atn_years` ~ Gamma(shape 6.38, scale 0.413), the half-life of
-#'   the antimalarial on the net in years (median 2.50, 95% within 1.00 to
-#'   5.04).
+#' * `half_life_atn_years` ~ lognormal(meanlog 1.1513, sdlog 0.2337), the
+#'   half-life of the antimalarial's EFFECT on the net in years (median 3.16,
+#'   mean 3.25, 95% within 2.00 and 5.00).
+#'
+#' Revised 2026-10-19, replacing Beta(41.8, 4.65) for `omega_atn`,
+#' Beta(19.11, 1.30) for the ATN `p_a` and Gamma(6.38, 0.413) for the
+#' half-life:
+#' * `omega_atn` was raised because its whole 95% range lay below the measured
+#'   net-contact shares (Gleave et al. 97-99% for every net type, treated or
+#'   not; Parker et al. 93.7% at a baited untreated net). The median now sits
+#'   above Parker's figure and below Gleave's, with the lower tail left for
+#'   the difference between a share measured over a whole assay and the share
+#'   of repelled mosquitoes contacting on a single feeding attempt.
+#' * the ATN `p_a` was raised on the dose-response evidence: complete blocking
+#'   after a one-minute exposure, an IC50 some two orders of magnitude below
+#'   the 200 mg/m2 loading (Paton et al.), and contact with an untreated net
+#'   lasting several times the exposure that sufficed. The AITN prior is
+#'   unchanged, since contact with an insecticide-treated net is shorter and
+#'   its reported bounds straddle that exposure.
+#' * the half-life applies to the EFFECT rather than the concentration, and is
+#'   the same prior under either decay form (see `ATN_DECAY_FORM` in
+#'   `analysis/07_run_projections.R`). The lower bound sits just below the
+#'   2.64-year half-life of pyrethroid-induced mortality at full
+#'   susceptibility; the upper bound is the net age at which a 200 mg/m2
+#'   loading would reach 50 mg/m2, the lowest concentration at which complete
+#'   blocking has been reported. A lognormal fits both, 2 and 5 being
+#'   equidistant from 3.16 on the log scale, where 1 and 5 were not
+#'   equidistant from the old median of 2.5 and a gamma was used instead.
 #'
 #' @return A named list of distribution parameters.
 #'
 #' @export
 projection_priors <- function() {
   list(
-    omega_atn           = list(shape1 = 41.8, shape2 = 4.65),
-    p_a                 = list(atn  = list(shape1 = 19.11, shape2 = 1.30),
+    omega_atn           = list(shape1 = 62.61, shape2 = 3.61),
+    p_a                 = list(atn  = list(shape1 = 34.47, shape2 = 1.37),
                                aitn = list(shape1 = 14.85, shape2 = 1.93)),
-    half_life_atn_years = list(shape = 6.38, scale = 0.413)
+    half_life_atn_years = list(meanlog = 1.1513, sdlog = 0.2337)
   )
 }

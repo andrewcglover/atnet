@@ -49,14 +49,16 @@ FORK_CODE  <- c("R", "src", "DESCRIPTION", "NAMESPACE", "inst")
 BATCH_SETTINGS <- c("OUT_SUFFIX", "HUMAN_POP", "END_DAY", "HISTORY_DIR", "ANTIMAL_HL_YEARS",
                     "SWEEP_ARMS", "NET_RETENTION_DAYS", "ATN_DELTAQ", "ATN_SPOR_LEN",
                     "OMEGA_QUANTILE", "P_A_QUANTILE", "ATN_MECHANISM",
-                    "FUTURE_RETENTION_DAYS")
+                    "FUTURE_RETENTION_DAYS", "ATN_DECAY_FORM", "ATN_DECAY_ZERO_YEARS",
+                    "PROJ_ROOT")
 
-# Nodes to keep work off, comma separated (HIPERCOW_EXCLUDE_NODES; "" for none). A node that
-# cannot start work fails in seconds and so is free again at once, which makes the scheduler
-# prefer it: one broken node will otherwise take a job from every submission. 2026-10-17:
-# wpia-029 failed two jobs with "the trust relationship between this workstation and the
-# primary domain failed". Remove it from this list once DIDE have repaired the node.
-EXCLUDE_NODES <- trimws(strsplit(Sys.getenv("HIPERCOW_EXCLUDE_NODES", "wpia-029"), ",")[[1]])
+# Nodes to keep work off, comma separated (HIPERCOW_EXCLUDE_NODES; empty for none). Two
+# things make this worth having: a node that cannot start work at all fails in seconds and is
+# then free again, so the scheduler hands it the next job too; and a node running at a
+# fraction of the usual speed holds up a whole wave, since a wave ends only when its slowest
+# job does. Which nodes those are is a property of one cluster at one time, so the list is
+# kept with the run outputs rather than here.
+EXCLUDE_NODES <- trimws(strsplit(Sys.getenv("HIPERCOW_EXCLUDE_NODES", ""), ",")[[1]])
 EXCLUDE_NODES <- EXCLUDE_NODES[nzchar(EXCLUDE_NODES)]
 
 # The nodes a task may run on: every node of the cluster but those. NULL = let hipercow choose
@@ -271,7 +273,12 @@ log_path <- function(b, stage, region = "", realisations = "") {
 # Submits the jobs in tasks (one per row: stage, region, realisations, cores,
 # log_file), one bulk submission per number of cores, and records them in the
 # results folder's submissions.rds.
-submit_tasks <- function(b, tasks, name) {
+# Everything is submitted at low priority: these runs hold a large share of the cluster for
+# hours at a time, and nobody else's work should wait behind them. It costs us only when
+# someone else wants the nodes, which is exactly when we should give way (user, 2026-10-19).
+JOB_PRIORITY <- Sys.getenv("HIPERCOW_PRIORITY", "low")
+
+submit_tasks <- function(b, tasks, name, max_runtime_h = NULL) {
   run_env <- c(b$settings, ATNET_CODE_DIR = b$snapshot, ATNET_VERSION = b$atnet_version)
   script  <- file.path(b$snapshot, "analysis", "07_run_projections.R")
   dir.create(b$out_dir, recursive = TRUE, showWarnings = FALSE)
@@ -281,7 +288,9 @@ submit_tasks <- function(b, tasks, name) {
     data <- tasks[tasks$cores == k, , drop = FALSE]
     bundle <- eval(bquote(hipercow::task_create_bulk_expr(
       .(CLUSTER_TASK), data = data, bundle_name = .(paste0(name, "_", k, "cores")),
-      resources = hipercow::hipercow_resources(cores = .(k), requested_nodes = .(nodes)))))
+      resources = hipercow::hipercow_resources(
+        cores = .(k), requested_nodes = .(nodes), priority = .(JOB_PRIORITY),
+        max_runtime = .(if (is.null(max_runtime_h)) NULL else as.integer(max_runtime_h * 60))))))
     rec <- cbind(task = bundle$ids, bundle = bundle$name, data, submitted = Sys.time(),
                  snapshot = b$snapshot, atnet_version = b$atnet_version, stringsAsFactors = FALSE)
     saveRDS(rbind(read_submissions(b$out_dir), rec), submissions_file(b$out_dir))
@@ -323,7 +332,15 @@ sweep_complete <- function(f) {
 }
 
 # One job per region x block of k consecutive realisations (first to last).
-submit_realisations <- function(b, first, last, k = 10L, regions = b$regions, submit = FALSE) {
+# cores_per_job separates how many realisations a job holds (k) from how many it runs at
+# once. With cores_per_job < k each core takes several realisations in turn, so the job is
+# proportionally longer but the whole group can be submitted at once without the node count
+# rising: the footprint is jobs x cores_per_job, and nothing waits on a wave boundary.
+# max_runtime_h caps a job, as insurance against a node running at a fraction of normal
+# speed; a job killed on the cap and resubmitted resumes, because 07 skips any realisation
+# whose file already exists.
+submit_realisations <- function(b, first, last, k = 10L, regions = b$regions, submit = FALSE,
+                                cores_per_job = NULL, max_runtime_h = NULL) {
   first <- as.integer(first); last <- as.integer(last); k <- as.integer(k)
   if (first < 1L || last > b$n_draws || last < first) {
     stop("Realisations must lie within 1-", b$n_draws, " (rows of the draws table).", call. = FALSE)
@@ -336,9 +353,12 @@ submit_realisations <- function(b, first, last, k = 10L, regions = b$regions, su
   ends   <- pmin(starts + k - 1L, last)
   # Every region's job for a block before the next block, so whole realisations finish first.
   tasks  <- expand.grid(region = ascii(regions), block = seq_along(starts), stringsAsFactors = FALSE)
+  width  <- ends[tasks$block] - starts[tasks$block] + 1L
   tasks  <- data.frame(stage = "realisations", region = tasks$region,
                        realisations = sprintf("%d-%d", starts[tasks$block], ends[tasks$block]),
-                       cores = ends[tasks$block] - starts[tasks$block] + 1L, stringsAsFactors = FALSE)
+                       cores = if (is.null(cores_per_job)) width else
+                         pmin(as.integer(cores_per_job), width),
+                       stringsAsFactors = FALSE)
 
   # Leave out region x block jobs already complete, or queued or running.
   sweep <- file.path(b$out_dir, sprintf("sweep_%srows%s.rds",
@@ -375,7 +395,8 @@ submit_realisations <- function(b, first, last, k = 10L, regions = b$regions, su
   }
   # Parameters of the first and last realisation of this range, every region and arm.
   preflight(b, rows = as.character(unique(c(first, last))), history = FALSE)
-  submit_tasks(b, tasks, sprintf("%s_rows%d-%d", basename(b$out_dir), first, last))
+  submit_tasks(b, tasks, sprintf("%s_rows%d-%d", basename(b$out_dir), first, last),
+               max_runtime_h = max_runtime_h)
 }
 
 # ---------------------------------------------------------------------

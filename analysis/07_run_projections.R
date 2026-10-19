@@ -69,6 +69,15 @@
 #                       calibrated_eir.csv, written by 07b from 07a's calibrations);
 #                       "none" keeps the site file's own. The run stops if the table was
 #                       fitted with other compartment counts or net retention
+#     ATN_DECAY_FORM    how the antimalarial's EFFECT wanes with the age of the
+#                       net: "exp" (default, every run to 2026-10-19) or
+#                       "smoothcompact". Both take the same half-life, so the
+#                       prior is on the half-life either way
+#     ATN_DECAY_ZERO_YEARS  the net age at which the smooth-compact form reaches
+#                       zero (default 20); ignored under "exp"
+#     PROJ_ROOT         the folder results go in, under the package (default
+#                       outputs/projections); set it to keep a new set of runs
+#                       apart from the existing ones
 #     SWEEP_CORES, NET_RETENTION_DAYS, OUT_SUFFIX, ATN_FORK_PATH, ATNET_CODE_DIR,
 #     ATNET_VERSION: see below
 #   A "realisation" is simulation i: row i of the draws table, with seed
@@ -283,10 +292,33 @@ omega_fixed <- if (is.null(omega_quantile)) NULL else
 p_a_fixed <- if (is.null(p_a_quantile)) NULL else
   vapply(.pri$p_a, function(b) qbeta(p_a_quantile, b$shape1, b$shape2), numeric(1))
 
+# ATN_DECAY_FORM: how the antimalarial's effect wanes with the age of the net.
+#   "exp" (default)  P(a) = exp(-gamma a), the form used in every run to 2026-10-19
+#   "smoothcompact"  P(a) = exp(-k (a/l)^2 / (1 - (a/l)^2)) for a < l, 0 beyond, the
+#                    smooth-compact function malariasimulation already offers for net
+#                    loss. It plateaus, then falls away, which is the shape a saturating
+#                    dose-response implies; l is ATN_DECAY_ZERO_YEARS and k is set from
+#                    the realisation's half-life, so the prior is on the half-life under
+#                    either form and no second parameter is drawn.
+# Both forms take the half-life of the EFFECT, not of the concentration.
+atn_decay_form <- tolower(Sys.getenv("ATN_DECAY_FORM", "exp"))
+if (!atn_decay_form %in% c("exp", "smoothcompact")) {
+  stop("ATN_DECAY_FORM must be 'exp' or 'smoothcompact', not '", atn_decay_form, "'.",
+       call. = FALSE)
+}
+atn_decay_zero_years <- as.numeric(Sys.getenv("ATN_DECAY_ZERO_YEARS", "20"))
+if (!(is.finite(atn_decay_zero_years) && atn_decay_zero_years > 0)) {
+  stop("ATN_DECAY_ZERO_YEARS must be a positive number of years.", call. = FALSE)
+}
+
+# PROJ_ROOT: the folder results go in, under the package. Defaults to the one every
+# run to 2026-10-19 used; set it to keep a new set of runs apart from those.
+proj_root <- Sys.getenv("PROJ_ROOT", file.path("outputs", "projections"))
+
 # OUT_SUFFIX: extra tag appended to the results folder name, e.g. for retention
 # sweeps or add-on arm runs. Nothing in it is ever overwritten.
 out_extra_suffix <- Sys.getenv("OUT_SUFFIX", "")
-OUT_DIR    <- file.path(ATNET_PATH, "outputs", "projections",
+OUT_DIR    <- file.path(ATNET_PATH, proj_root,
                         sprintf("%s_hl%s%s", tolower(COUNTRY_ISO), hl_tag, out_extra_suffix))
 JOB_DIR    <- file.path(OUT_DIR, "jobs")
 # Jobs in which any segment failed, kept for diagnosis; they are not skipped.
@@ -455,8 +487,10 @@ if (!is.null(omega_quantile) || !is.null(p_a_quantile) || atn_mechanism != "both
                   switch(atn_mechanism, both = "both", blocking = "blocking only (no EIP lengthening)",
                          eip = "EIP lengthening only (no blocking)")))
 }
-message(sprintf("Antimalarial half-life: %s | arms: %s",
+message(sprintf("Antimalarial half-life: %s | decay: %s | arms: %s",
                 if (is.null(hl_fixed_years)) "drawn per realisation" else sprintf("fixed at %g yr", hl_fixed_years),
+                if (atn_decay_form == "exp") "exponential" else
+                  sprintf("smooth-compact (zero at %g yr)", atn_decay_zero_years),
                 paste(arms, collapse = ",")))
 message(sprintf("OUT_DIR: %s", OUT_DIR))
 
@@ -753,7 +787,16 @@ row_inputs <- function(i) {
 # (the upper bound of the 2-10 year band is 3649, not 3650: the age ranges are inclusive).
 # Settings for these were removed on 2026-10-16 after being found to have no effect.
 population_overrides <- list(human_population = human_pop)
-form_overrides <- list(use_eip_hill = TRUE, use_bompard = TRUE)
+# Functional-form switches. The decay-form keys are passed only when the
+# smooth-compact form is asked for, so that a fork without them still runs the
+# default (exponential) form, which is what every run to 2026-10-19 used.
+form_overrides <- c(
+  list(use_eip_hill = TRUE, use_bompard = TRUE),
+  if (atn_decay_form == "smoothcompact") {
+    list(atn_decay_form      = "smoothcompact",
+         atn_decay_zero_days = atn_decay_zero_years * 365)
+  }
+)
 
 # ---------------------------------------------------------------------
 # 5. Load site; establish the calendar
@@ -1273,6 +1316,9 @@ run_settings <- list(
   p_a_quantile     = p_a_quantile,     # NULL = drawn per realisation
   p_a_fixed        = p_a_fixed,
   atn_mechanism    = atn_mechanism,    # "both", "blocking" or "eip"
+  atn_decay_form   = atn_decay_form,   # "exp" or "smoothcompact"
+  atn_decay_zero_years = if (atn_decay_form == "smoothcompact")
+                           atn_decay_zero_years else NULL,
   arms             = arms,
   n_steps          = n_steps,
   deltaq_use       = deltaq_use,

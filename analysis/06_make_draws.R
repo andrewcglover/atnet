@@ -16,9 +16,13 @@
 #       one whole iteration of the TRA fit (tra.rds), chosen independently of
 #       the EIP iteration; on the laboratory scale, since malariasimulation
 #       maps them to the field scale itself (use_bompard = TRUE)
-#   omega_atn, p_a_quantile, p_a_atn, p_a_aitn, half_life_atn_years
-#       one value from each prior in projection_priors(); p_a_atn and
-#       p_a_aitn are the same quantile p_a_quantile of the ATN and AITN priors
+#   omega_quantile, omega_atn, p_a_quantile, p_a_atn, p_a_aitn,
+#   half_life_quantile, half_life_atn_years
+#       one value from each prior in projection_priors(), each drawn as a
+#       uniform quantile that is kept alongside its value; p_a_atn and
+#       p_a_aitn are the same quantile p_a_quantile of the ATN and AITN priors.
+#       Keeping the quantiles lets a revised prior be applied to the same
+#       realisations without reordering them.
 #
 # Insecticide-treated net column:
 #   itn_draw
@@ -114,9 +118,9 @@ prior_tab <- rbind(
   p_a_aitn = c(summ(draws$p_a_aitn),
                stats::qbeta(q, pr$p_a$aitn$shape1, pr$p_a$aitn$shape2)),
   half_life_atn_years = c(summ(draws$half_life_atn_years),
-                          stats::qgamma(q,
-                                        shape = pr$half_life_atn_years$shape,
-                                        scale = pr$half_life_atn_years$scale))
+                          stats::qlnorm(q,
+                                        meanlog = pr$half_life_atn_years$meanlog,
+                                        sdlog = pr$half_life_atn_years$sdlog))
 )
 colnames(prior_tab) <- c("table 2.5%", "table 50%", "table 97.5%",
                          "prior 2.5%", "prior 50%", "prior 97.5%")

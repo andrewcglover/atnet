@@ -464,6 +464,24 @@ retention_time <- if (!is.null(retention_override)) retention_override else rete
 message(sprintf("Net retention = %.1f days (%s)", retention_time,
                 if (is.null(retention_override)) sprintf("%g years", retention_years) else "manual override"))
 
+# FUTURE_RETENTION_DAYS: net retention for the arms only, that is for nets distributed from
+# 2025. The shared history and the 2022-2024 segment keep retention_time, so the calibrated
+# baseline still holds and nothing before 2025 moves: a net already held keeps the loss time
+# drawn for it when it was given out (malariasimulation draws that at each distribution), so
+# this is "retention changes from now" rather than a different past. It applies to every arm
+# that hands out future nets, ITN arms included, since a change in durability would affect
+# all net types. Unset = retention_time throughout, which is the main analysis.
+fut_ret_env <- Sys.getenv("FUTURE_RETENTION_DAYS", "")
+future_retention <- if (nzchar(fut_ret_env)) as.numeric(fut_ret_env) else NULL
+if (!is.null(future_retention) && !(is.finite(future_retention) && future_retention > 0)) {
+  stop("FUTURE_RETENTION_DAYS must be a positive number of days, not '", fut_ret_env, "'.",
+       call. = FALSE)
+}
+if (!is.null(future_retention)) {
+  message(sprintf("Net retention from 2025 (arms only) = %.1f days; history and 2022-2024 stay at %.1f",
+                  future_retention, retention_time))
+}
+
 # Baseline EIRs. The site file's were fitted for upstream malariasimulation, which differs
 # from the fork in its EIP and, here, in net retention, so run at them the history misses
 # the prevalence they were fitted to. 07a_calibrate_eir.R refits them for this model and
@@ -930,9 +948,21 @@ build_future_schedule <- function(arm, region, inp) {
 # 7. Build parameters for one region x arm x realisation (draw = its row of the
 #    draws table). arm = "history" builds the shared 2000-2021 segment: site net
 #    efficacy throughout, no future nets, ATN off, and no realisation (draw = NULL).
+#
+#    stage says which segment is being built, because the 2022-2024 segment is built with
+#    arm "none" and so cannot otherwise be told from the projection's own no-nets arm.
+#    Only "projection" takes FUTURE_RETENTION_DAYS; "pre" and the history keep
+#    retention_time. The arm's parameters still list the 2000-2024 distributions, but those
+#    days are past when the arm resumes, so they never fire again and a single retention
+#    per run gives exactly "nets handed out from 2025 last longer (or less long)".
 # ---------------------------------------------------------------------
-build_params <- function(region, arm, draw) {
+build_params <- function(region, arm, draw, stage = c("projection", "pre")) {
 
+  stage <- match.arg(stage)
+  # The history is 2000-2021 and so is never "from 2025", whatever stage it is asked for
+  # with; keeping it at retention_time is what lets the saved histories still be reused.
+  retention_use <- if (stage == "projection" && arm != "history" && !is.null(future_retention))
+                     future_retention else retention_time
   inp <- if (arm == "history") NULL else row_inputs(draw)
 
   site_row <- site_obj$sites[site_obj$sites$name_1 == region, , drop = FALSE]
@@ -1032,7 +1062,7 @@ build_params <- function(region, arm, draw) {
   p <- set_bednets(p,
     timesteps = ts,
     coverages = cov,
-    retention = retention_time,
+    retention = retention_use,
     dn0       = matrix(rep(dn0, n_sp), ncol = n_sp),
     rn        = matrix(rep(rn,  n_sp), ncol = n_sp),
     rnm       = matrix(rep(rnm, n_sp), ncol = n_sp),
@@ -1041,7 +1071,7 @@ build_params <- function(region, arm, draw) {
   # site_parameters() has already called set_bednets() with the site file's own
   # retention, and the fork sets the ATN coverage loss rate from the first such
   # call only, so set it here from the retention the nets now use.
-  p$lambda_atn <- 1 / retention_time
+  p$lambda_atn <- 1 / retention_use
 
   p
 }
@@ -1143,7 +1173,7 @@ run_row <- function(job, end_day = n_steps) {
   t0 <- proc.time()[["elapsed"]]
   pre <- tryCatch({
     h <- readRDS(history_file(region))
-    p_pre <- build_params(region, "none", draw)
+    p_pre <- build_params(region, "none", draw, stage = "pre")
     set.seed(seed)
     run_resumable_simulation(pre_end_day, parameters = p_pre,
                              initial_state = h$state, restore_random_state = FALSE)
@@ -1234,6 +1264,7 @@ run_settings <- list(
   itn_draws_source = itn_draws_source()[c("repo", "commit", "md5")],
   human_pop        = human_pop,
   retention_time   = retention_time,
+  future_retention = future_retention,   # NULL = retention_time from 2025 as well
   campaign_cov     = campaign_cov,
   cd_floor_frac    = cd_floor_frac,
   hl_fixed_years   = hl_fixed_years,   # NULL = each realisation's drawn half-life
@@ -1316,7 +1347,8 @@ parallel::clusterExport(cl, c(
   "future_start_day", "history_end_day", "pre_end_day", "branch_year", "future_campaign_days",
   "n_steps", "n_future_years", "draws_tab", "itn_draws", "net_of_arm",
   "net_of_site_type", "p_a_of_arm", "hl_fixed_years", "SEED_BASE",
-  "cd_cov", "campaign_cov", "cd_interval", "retention_time", "deltaq_use", "spor_len_use",
+  "cd_cov", "campaign_cov", "cd_interval", "retention_time", "future_retention",
+  "deltaq_use", "spor_len_use",
   "omega_quantile", "omega_fixed", "p_a_quantile", "p_a_fixed", "atn_mechanism",
   "population_overrides", "form_overrides", "human_pop", "future_interventions",
   "COUNTRY_ISO", "HISTORY_DIR", "JOB_DIR", "FAILED_DIR", "END_DAY", "keep_columns",

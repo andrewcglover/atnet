@@ -48,7 +48,8 @@ FORK_CODE  <- c("R", "src", "DESCRIPTION", "NAMESPACE", "inst")
 # 07's settings that a batch may set (see 07's header).
 BATCH_SETTINGS <- c("OUT_SUFFIX", "HUMAN_POP", "END_DAY", "HISTORY_DIR", "ANTIMAL_HL_YEARS",
                     "SWEEP_ARMS", "NET_RETENTION_DAYS", "ATN_DELTAQ", "ATN_SPOR_LEN",
-                    "OMEGA_QUANTILE", "P_A_QUANTILE", "ATN_MECHANISM")
+                    "OMEGA_QUANTILE", "P_A_QUANTILE", "ATN_MECHANISM",
+                    "FUTURE_RETENTION_DAYS")
 
 # Nodes to keep work off, comma separated (HIPERCOW_EXCLUDE_NODES; "" for none). A node that
 # cannot start work fails in seconds and so is free again at once, which makes the scheduler

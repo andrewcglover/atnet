@@ -8,8 +8,10 @@
 # imports are listed here instead, so it finds them already installed.
 repo::https://mrc-ide.r-universe.dev
 
-# The ATN fork of malariasimulation, pinned by tag.
-andrewcglover/malariasimulation@v0.2-atn
+# The ATN fork of malariasimulation, pinned by tag. v0.3-atn (2026-10-20) adds
+# atn_decay_form, the smooth-compact option for the antimalarial's effect decay;
+# its default reproduces v0.2-atn exactly, so the exponential runs are unaffected.
+andrewcglover/malariasimulation@v0.3-atn
 
 # Used by analysis/07_run_projections.R.
 dplyr

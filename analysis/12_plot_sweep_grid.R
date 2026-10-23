@@ -195,6 +195,10 @@ grid_figure <- function(key, d = grid_data(key), ylim = NULL,
                         guide = if (legend) "legend" else "none") +
     scale_fill_manual(values = arm_colours, guide = "none") +
     scale_x_discrete(labels = NULL, breaks = NULL) +
+    # Labelled every 200 with a line every 100 between. The sequence
+    # runs well past any panel; the scale shows only what it reaches.
+    scale_y_continuous(breaks = seq(-2000, 2000, 200),
+                       minor_breaks = seq(-2000, 2000, 100)) +
     coord_cartesian(ylim = ylim) +
     labs(x = NULL, title = title,
          y = if (is.null(ylab))
@@ -203,11 +207,11 @@ grid_figure <- function(key, d = grid_data(key), ylim = NULL,
          else if (isFALSE(ylab)) NULL else ylab) +
     theme_minimal(base_size = base) +
     theme(panel.grid.major.x = element_blank(),
-          panel.grid.minor = element_blank(),
+          panel.grid.minor.x = element_blank(),
           strip.text = element_text(size = base - 1),
           strip.text.y = if (row_strips) element_text(size = base - 1)
                          else element_blank(),
-          plot.title = element_text(size = base + 1),
+          plot.title = element_text(size = base + 1, hjust = 0.5),
           axis.text.y = if (yticks) element_text() else element_blank(),
           legend.position = "bottom",
           axis.ticks.x = element_blank(),
@@ -242,8 +246,14 @@ for (key in names(quantities)) {
 # has to hold everything from the deepest the weakest arm falls below
 # Pyr-CFP to the most the strongest averts against no nets, so each
 # grid uses less of its height than it does on its own.
-shared <- range(vapply(parts, grid_range, numeric(2)))
-message(sprintf("Shared y scale: %.0f to %.0f", shared[1], shared[2]))
+needed <- range(vapply(parts, grid_range, numeric(2)))
+shared <- c(-600, 1000)
+message(sprintf("Shared y scale: %.0f to %.0f (holding %.0f to %.0f)",
+                shared[1], shared[2], needed[1], needed[2]))
+if (needed[1] < shared[1] || needed[2] > shared[2]) {
+  warning("The shared scale cuts off ", sprintf("%.0f to %.0f", needed[1],
+          needed[2]), call. = FALSE)
+}
 combined <- patchwork::wrap_plots(
   lapply(seq_along(quantities), function(i) {
     key <- names(quantities)[i]
@@ -252,7 +262,7 @@ combined <- patchwork::wrap_plots(
     # The retention strips are on D alone: the rows line up across all
     # four, so one set of labels does for them.
     grid_figure(key, parts[[key]], ylim = shared, legend = i == 1L,
-                title = paste("vs", against[[key]]),
+                title = paste0("Comparator: ", against[[key]]),
                 ylab = if (i == 1L)
                   "Clinical cases averted per 1,000 people per year vs comparator"
                 else FALSE,
@@ -263,9 +273,12 @@ combined <- patchwork::wrap_plots(
   patchwork::plot_annotation(tag_levels = "A") &
   ggplot2::theme(legend.position = "bottom",
                  plot.tag = ggplot2::element_text(size = 20, face = "bold"),
-                 # Room between the grids: with none, the next grid's y
-                 # title runs into the last one's retention strips.
-                 plot.margin = ggplot2::margin(5, 4, 5, 4))
+                 # The grids meet, each inside its own rule: nothing
+                 # between them to collide, B to D having no y labels
+                 # and A to C no retention strips.
+                 plot.margin = ggplot2::margin(4, 0, 4, 0),
+                 plot.background = ggplot2::element_rect(
+                   colour = "grey40", fill = NA, linewidth = 0.4))
 # Four grids in a row, each about two thirds the width it has on its own.
 save_figure(combined, file.path(out_dir, sprintf("sweep_grid_all_%s", form)),
             20, 10.5)

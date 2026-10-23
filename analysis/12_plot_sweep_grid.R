@@ -138,16 +138,20 @@ grid_figure <- function(key) {
   }
 
   ggplot(points, aes(arm, median, colour = arm)) +
-    # The comparators' intervals are a backdrop, so they are shaded
-    # rather than ruled: three pairs of dotted lines crowded the panels
-    # and read as content. They are drawn first and faintly, the three
-    # of them overlapping over much of the range.
-    geom_rect(data = ends, inherit.aes = FALSE,
-              aes(xmin = -Inf, xmax = Inf, ymin = lower, ymax = upper,
-                  fill = arm), alpha = 0.10) +
+    # The comparators are a backdrop in two weights: the ends of their
+    # interval as faint dashed rules, the median as a solid line held
+    # back from full strength, so the A(I)TN points stay the darkest
+    # thing in the panel. Their intervals are not shaded: they are wide
+    # enough to cover most of a panel, so a fill reads as a tinted
+    # background rather than as an interval, and three of them together
+    # leave no white at all.
     geom_hline(yintercept = 0, colour = "grey75", linewidth = 0.3) +
+    geom_hline(data = ends, aes(yintercept = lower, colour = arm),
+               linetype = "dashed", linewidth = 0.4, alpha = 0.35) +
+    geom_hline(data = ends, aes(yintercept = upper, colour = arm),
+               linetype = "dashed", linewidth = 0.4, alpha = 0.35) +
     geom_hline(data = lines, aes(yintercept = median, colour = arm),
-               linetype = "dashed", linewidth = 0.5) +
+               linewidth = 0.5, alpha = 0.65) +
     geom_linerange(aes(ymin = lower, ymax = upper), linewidth = 0.9) +
     geom_point(size = 2.4) +
     facet_grid(hl_years ~ retention_years,
@@ -158,7 +162,6 @@ grid_figure <- function(key) {
                         breaks = c(itn_arms, atn_arms),
                         labels = arm_labels[c(itn_arms, atn_arms)],
                         name = NULL) +
-    scale_fill_manual(values = arm_colours, guide = "none") +
     scale_x_discrete(labels = NULL, breaks = NULL) +
     labs(x = NULL,
          y = sprintf("Clinical cases averted per 1,000 people per year, vs %s",

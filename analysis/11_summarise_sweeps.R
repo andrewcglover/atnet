@@ -14,14 +14,16 @@
 #   omega_q, p_a_q    the quantile the contact probability and p_A were
 #                     held at, NA when they are drawn
 #
-# It does NOT work out cases averted. Most runs hold the three ATN arms
-# alone, so their comparator comes from the matching seven-arm run and the
-# arms have to be paired by draws-table row across runs; that pairing
-# belongs with the figure that needs it, not here.
+# Once every run is in, it adds the cases averted the sensitivity figures
+# are about: against no future nets, and head to head against each ITN.
+# Most runs hold the three ATN arms alone, so the comparators come from
+# the seven-arm run with the same net retention, paired by region and
+# draws-table row; that is why the contrasts wait until the end rather
+# than being worked out run by run.
 #
 # Written to outputs/summaries/<root folder's name>/:
 #   runs/<run>.rds    one run's lines, kept so the pass can be resumed
-#   sweep_values.rds  every run's lines, bound together
+#   sweep_values.rds  every run's lines, with the contrasts added
 #
 # Reading 109,000 job files takes hours, so each run is saved as it is
 # finished and a run already saved is skipped. Deleting a file in runs/ is
@@ -111,6 +113,48 @@ say("%d run(s) summarised, %d already had a file", done, skipped)
 files <- list.files(run_dir, pattern = "\\.rds$", full.names = TRUE)
 all <- do.call(rbind, lapply(files, readRDS))
 rownames(all) <- NULL
+
+# Cases averted, paired within a draws-table row. Most runs hold the
+# three ATN arms alone, so the comparators come from the seven-arm run
+# with the same net retention -- the one quantity they share, since a
+# comparator carries no antimalarial and so does not depend on the
+# half-life, the decay form, the mechanism, p_A or omega. Everything is
+# matched on region and row as well, the arms of a row having started
+# from the same end-2024 state.
+#
+#   averted_per1000   vs no future nets
+#   vs_pyr, vs_pyr_pbo, vs_pyr_cfp
+#                     head to head against each ITN, as the difference of
+#                     what the two avert, over the same person-years
+#
+# A positive value means the arm of the line averts the more. Lines with
+# no comparator at their retention get NA rather than being dropped.
+comparators <- c("none", "pyr", "pyr_pbo", "pyr_cfp")
+ref <- all[all$arm %in% comparators,
+           c("retention_days", "region", "draw", "arm", "clin_cases",
+             "person_years")]
+dup <- duplicated(ref[c("retention_days", "region", "draw", "arm")])
+if (any(dup)) {
+  warning(sum(dup), " comparator line(s) are given by more than one run; ",
+          "the first is used.", call. = FALSE)
+  ref <- ref[!dup, ]
+}
+at <- function(d) paste(d$retention_days, d$region, d$draw)
+none <- ref[ref$arm == "none", ]
+i <- match(at(all), at(none))
+if (anyNA(i)) {
+  say("%d line(s) have no 'none' arm at their retention; averted is NA",
+      sum(is.na(i)))
+}
+all$averted_per1000 <- 1000 * (none$clin_cases[i] - all$clin_cases) /
+  none$person_years[i]
+for (a in setdiff(comparators, "none")) {
+  cmp <- ref[ref$arm == a, ]
+  j <- match(at(all), at(cmp))
+  all[[paste0("vs_", a)]] <- 1000 * (cmp$clin_cases[j] - all$clin_cases) /
+    none$person_years[i]
+}
+
 saveRDS(all, file.path(out_dir, "sweep_values.rds"))
 say("%d lines from %d run(s) -> %s", nrow(all), length(files),
     file.path(out_dir, "sweep_values.rds"))

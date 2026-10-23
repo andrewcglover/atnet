@@ -86,8 +86,19 @@ arms <- projection_arms()
 arms$colour <- c("#BBBBBB", "#EE7733", "#CC3311", "#EE3377", "#009988",
                  "#0077BB", "#33BBEE")
 key_colours <- c(setNames(arms$colour, arms$arm), shared = "#555555")
-key_labels <- c(setNames(arms$label, arms$arm), shared = "Before the switch (all arms)")
+key_labels <- c(setNames(arms$label, arms$arm), shared = "Historic")
 band_arms <- c("pyr_cfp", "atn", "pyr_atn", "pyr_cfp_atn")
+
+# Drawing order, so that where lines and bands overlap the later arm lies
+# on top: the shared stretch first, then the arms in the order of
+# projection_arms(), ending with Pyr-CFP-ATN. ggplot draws groups in the
+# order of the grouping factor's levels, so the order has to be set here
+# and not left to the alphabet.
+grp_levels <- c("shared", paste("shared", arms$arm), paste(arms$arm, arms$arm))
+order_groups <- function(d) {
+  d$grp <- factor(d$grp, levels = grp_levels)
+  d[order(d$grp), , drop = FALSE]
+}
 
 model_year <- function(t) 2000 + (t - 1) / 365
 half_window <- 182L
@@ -192,10 +203,10 @@ shared_band <- function(display_arms) {
            grp = "shared")
 }
 band_data <- function(display_arms) {
-  bind_rows(
+  order_groups(bind_rows(
     shared_band(display_arms),
     rolling %>% filter(key != "shared", arm %in% display_arms, !is.na(roll_lo))
-  )
+  ))
 }
 
 # The lines of one figure, for the arms it shows. Over the shared stretch
@@ -206,7 +217,8 @@ line_data <- function(d, display_arms, shared_one) {
   shared <- d %>% filter(key == "shared")
   shared <- if (shared_one) shared %>% filter(arm == arms$arm[1])
             else shared %>% filter(arm %in% display_arms)
-  bind_rows(shared, d %>% filter(key != "shared", arm %in% display_arms))
+  order_groups(bind_rows(shared, d %>% filter(key != "shared",
+                                              arm %in% display_arms)))
 }
 # The y scale is shared by every panel, and set by what is on show.
 y_max <- 10 * ceiling(max(c(series$daily, series$roll_hi), na.rm = TRUE) / 10)
@@ -279,12 +291,15 @@ averted <- summarise_rows(arm_contrasts(national, comparator = "none"),
                           "cases_averted_per1000", digits = 0)
 averted$label <- factor(arms$label[match(averted$arm, arms$arm)],
                         levels = rev(arms$label[-1]))
+# The period panel B covers is left to the caption rather than titled, so
+# it is printed here for whoever writes it.
 model_month <- function(t) {
   format(as.Date("2001-01-01") + (t - 1) %% 365, "%b")
 }
-cycle_text <- sprintf("%s, %s %d to %s %d", country,
-                      model_month(cycle["from"]), floor(model_year(cycle["from"])),
-                      model_month(cycle["to"]), floor(model_year(cycle["to"])))
+message(sprintf("Panel B covers %s, %s %d to %s %d", country,
+                model_month(cycle["from"]), floor(model_year(cycle["from"])),
+                model_month(cycle["to"]), floor(model_year(cycle["to"]))))
+
 panel_b <- ggplot(averted, aes(median, label, colour = arm)) +
   geom_vline(xintercept = 0, colour = "grey60", linewidth = 0.4) +
   geom_linerange(aes(xmin = lower, xmax = upper), linewidth = 1) +
@@ -293,20 +308,31 @@ panel_b <- ggplot(averted, aes(median, label, colour = arm)) +
   scale_x_continuous(limits = c(min(0, averted$lower), NA),
                      expand = expansion(mult = c(0, 0.05))) +
   labs(x = "Clinical cases averted per 1,000\npeople per year, vs no future nets",
-       y = NULL, title = cycle_text, tag = "B") +
+       y = NULL, tag = "B") +
   theme_minimal(base_size = 13) +
   theme(panel.grid.major.y = element_blank(),
         panel.grid.minor = element_blank(),
         axis.text.y = element_text(size = 13, colour = "black"),
-        plot.title = element_text(size = 13),
-        plot.title.position = "plot",
-        plot.tag = element_text(size = 18, face = "bold"))
+        plot.tag = element_text(size = 18, face = "bold"),
+        # A rule round the inset, set in from the edge of its cell so the
+        # inset reads as a panel of its own rather than as the corner of
+        # the figure.
+        plot.background = element_rect(colour = "grey40", fill = NA,
+                                       linewidth = 0.4),
+        plot.margin = margin(12, 12, 12, 12))
 
 y_title <- wrap_elements(full = grid::textGrob(
   expression(italic(Pf) * PR[2 - 10] * " (%)"), rot = 90,
   gp = grid::gpar(fontsize = 15)))
 x_title <- wrap_elements(full = grid::textGrob("Year",
                                                gp = grid::gpar(fontsize = 15)))
+
+# A plot laid into a share of the space it is given, so panel B sits a
+# little inside its corner of the figure rather than filling it.
+scaled <- function(p, s = 0.9) {
+  grid::grobTree(ggplot2::ggplotGrob(p),
+                 vp = grid::viewport(width = s, height = s))
+}
 
 build_figure <- function(keys, legend_title, show_daily, show_bands) {
   design <- c(
@@ -323,7 +349,7 @@ build_figure <- function(keys, legend_title, show_daily, show_bands) {
   plots <- c(list(y_title, x_title,
                   wrap_elements(full = legend_panel(keys, legend_title,
                                                     show_bands)),
-                  wrap_elements(full = panel_b)),
+                  wrap_elements(full = scaled(panel_b))),
              panels)
   wrap_plots(plots, design = design, widths = c(0.12, rep(1, 5)),
              heights = c(rep(1, 4), 0.1))

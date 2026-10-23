@@ -569,3 +569,12 @@ save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
                          nat_bands = TRUE,
                          nat_keys = c("none", band_arms, "shared")),
             "fig5_national_medians_bandinset")
+# The same again without Pyr-CFP-ATN in the inset, whose band runs under
+# the others for the whole period.
+save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
+                         show_bands = FALSE, national = TRUE,
+                         nat_bands = TRUE,
+                         nat_keys = c("none",
+                                      setdiff(band_arms, "pyr_cfp_atn"),
+                                      "shared")),
+            "fig5_national_medians_bandinset_v2")

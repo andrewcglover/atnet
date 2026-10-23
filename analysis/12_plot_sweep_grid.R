@@ -138,13 +138,14 @@ grid_figure <- function(key) {
   }
 
   ggplot(points, aes(arm, median, colour = arm)) +
-    # The comparators are a backdrop in two weights: the ends of their
-    # interval as faint dashed rules, the median as a solid line held
-    # back from full strength, so the A(I)TN points stay the darkest
-    # thing in the panel. Their intervals are not shaded: they are wide
-    # enough to cover most of a panel, so a fill reads as a tinted
-    # background rather than as an interval, and three of them together
-    # leave no white at all.
+    # The comparators are a backdrop in three weights: their interval as
+    # a tint, its ends as faint dashed rules, and the median as a solid
+    # line held back from full strength, so the A(I)TN points stay the
+    # darkest thing in the panel. The tints are wide and overlap, so
+    # much of a panel carries one.
+    geom_rect(data = ends, inherit.aes = FALSE,
+              aes(xmin = -Inf, xmax = Inf, ymin = lower, ymax = upper,
+                  fill = arm), alpha = 0.15) +
     geom_hline(yintercept = 0, colour = "grey75", linewidth = 0.3) +
     geom_hline(data = ends, aes(yintercept = lower, colour = arm),
                linetype = "dashed", linewidth = 0.4, alpha = 0.35) +
@@ -154,7 +155,10 @@ grid_figure <- function(key) {
                linewidth = 0.5, alpha = 0.65) +
     geom_linerange(aes(ymin = lower, ymax = upper), linewidth = 0.9) +
     geom_point(size = 2.4) +
-    facet_grid(hl_years ~ retention_years,
+    # Retention down, half-life across: the comparators depend on the
+    # retention alone, so laid out this way their lines are the same
+    # the length of a row and read as one backdrop to it.
+    facet_grid(retention_years ~ hl_years,
                labeller = labeller(
                  hl_years = function(x) paste0("Half-life ", x, " y"),
                  retention_years = function(x) paste0("Retention ", x, " y"))) +
@@ -162,6 +166,7 @@ grid_figure <- function(key) {
                         breaks = c(itn_arms, atn_arms),
                         labels = arm_labels[c(itn_arms, atn_arms)],
                         name = NULL) +
+    scale_fill_manual(values = arm_colours, guide = "none") +
     scale_x_discrete(labels = NULL, breaks = NULL) +
     labs(x = NULL,
          y = sprintf("Clinical cases averted per 1,000 people per year, vs %s",
@@ -178,9 +183,9 @@ for (key in names(quantities)) {
   message("Drawing ", key)
   fig <- grid_figure(key)
   stem <- file.path(out_dir, sprintf("sweep_grid_%s_%s", key, form))
-  ggsave(paste0(stem, ".png"), fig, width = 13, height = 9, dpi = 300,
+  ggsave(paste0(stem, ".png"), fig, width = 11, height = 12, dpi = 300,
          device = ragg::agg_png, bg = "white")
-  ggsave(paste0(stem, ".pdf"), fig, width = 13, height = 9,
+  ggsave(paste0(stem, ".pdf"), fig, width = 11, height = 12,
          device = grDevices::cairo_pdf)
   message("Saved: ", stem, ".(png|pdf)")
 }

@@ -15,12 +15,18 @@
 # are the median and 95% interval across rows (see
 # analysis/09_summarise_projections.R).
 #
-# Two versions, written to outputs/figures/<first run folder's name>/:
-#   fig5_medians.(png|pdf)   medians for all seven arms (main text)
-#   fig5_bands.(png|pdf)     medians and 95% intervals for Pyr-CFP, ATN,
-#                            Pyr-ATN and Pyr-CFP-ATN (appendix); each band is
-#                            for one arm on its own, although the arms are
-#                            paired within rows
+# Two versions, written to outputs/figures/<first run folder's name>/, with
+# the antimalarial's decay form (exp or smoothcompact) in the file name:
+#   fig5_medians_<form>.(png|pdf)  medians for all seven arms (main text)
+#   fig5_bands_<form>.(png|pdf)    medians and 95% intervals for Pyr-CFP,
+#                            ATN, Pyr-ATN and Pyr-CFP-ATN (appendix); each
+#                            band is for one arm on its own, although the
+#                            arms are paired within rows
+#
+# NB for the caption: the bold lines are a CENTRED 365-day mean, so they
+# begin to separate half a year before the arms do. The arms themselves part
+# on the dashed line, the last day of 2024; at that point half of the
+# window is already arm days. The faint daily lines part on the day itself.
 #
 # Needs every region of the site file. Reads the outputs only; it runs no
 # simulations. Name one run folder, or several when the arms are spread
@@ -132,21 +138,22 @@ values <- cached$values
 t0 <- cached$t0
 
 # Split each line into the stretch all arms share and the arms' own. The
-# arms' bands start in 2025: before then the four overlap almost exactly and
-# stack into one dark band.
-split_shared <- function(s, value, shared_until, arms_from = shared_until) {
+# daily lines part on the day the arms do; the rolling lines and their bands
+# part half a year earlier, where the centred window first reaches that day.
+# Lines and bands part together, so the colours take over from the grey with
+# no gap.
+split_shared <- function(s, value, shared_until) {
   s$value <- s[[value]]
   bind_rows(
     s %>% filter(arm == "none", timestep <= shared_until) %>%
       mutate(key = "shared"),
-    s %>% filter(timestep >= arms_from) %>% mutate(key = arm)
+    s %>% filter(timestep >= shared_until) %>% mutate(key = arm)
   ) %>%
     mutate(key = factor(key, levels = c("shared", arms$arm)))
 }
 daily <- split_shared(series, "daily", t0 - 1L)
 rolling <- split_shared(series, "roll_med", t0 - 1L - half_window)
-bands <- split_shared(series, "roll_med", t0 - 1L - half_window, t0) %>%
-  filter(!is.na(roll_lo))
+bands <- rolling %>% filter(!is.na(roll_lo))
 y_max <- 10 * ceiling(max(c(series$daily, series$roll_hi), na.rm = TRUE) / 10)
 
 region_panel <- function(region, keys, show_daily, show_bands) {
@@ -259,8 +266,14 @@ build_figure <- function(keys, legend_title, show_daily, show_bands) {
              heights = c(rep(1, 4), 0.1))
 }
 
+# The antimalarial's decay form goes in the file name: the two forms give
+# two versions of this figure and they must not be told apart by their
+# folder alone. A run built before the parameter existed used the
+# exponential.
+decay_form <- if (is.null(settings$atn_decay_form)) "exp" else settings$atn_decay_form
+
 save_figure <- function(fig, name) {
-  stem <- file.path(out_dir, name)
+  stem <- file.path(out_dir, paste0(name, "_", decay_form))
   ggsave(paste0(stem, ".png"), fig, width = 13, height = 9, dpi = 300,
          device = ragg::agg_png, bg = "white")
   ggsave(paste0(stem, ".pdf"), fig, width = 13, height = 9,

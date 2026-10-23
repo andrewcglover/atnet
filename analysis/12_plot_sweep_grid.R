@@ -182,7 +182,7 @@ grid_figure <- function(key, d = grid_data(key), ylim = NULL,
     geom_hline(data = ends, aes(yintercept = median, colour = arm),
                linewidth = 0.5, alpha = 0.65) +
     geom_linerange(aes(ymin = lower, ymax = upper), linewidth = 0.9) +
-    geom_point(size = 2.4) +
+    geom_point(size = 1.9) +
     # Retention down, half-life across: the comparators depend on the
     # retention alone, so laid out this way their lines are the same
     # the length of a row and read as one backdrop to it.

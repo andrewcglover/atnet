@@ -229,8 +229,10 @@ grid_figure <- function(key, d = grid_data(key), ylim = NULL,
             element_rect(colour = "grey40", fill = NA, linewidth = 0.4)
           else element_blank(),
           # The columns of a row carry one backdrop between them, so
-          # they run together rather than sitting apart.
-          panel.spacing.x = unit(0, "pt"))
+          # they run together rather than sitting apart. The rows do not,
+          # and are given a little more room than the default.
+          panel.spacing.x = unit(0, "pt"),
+          panel.spacing.y = unit(10, "pt"))
 }
 
 save_figure <- function(fig, stem, width, height) {

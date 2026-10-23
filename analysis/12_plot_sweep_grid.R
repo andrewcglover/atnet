@@ -166,12 +166,17 @@ grid_figure <- function(key, d = grid_data(key), ylim = NULL,
     # reads as a background colour rather than as an interval.
     geom_rect(data = ends, inherit.aes = FALSE,
               aes(xmin = -Inf, xmax = Inf, ymin = lower, ymax = upper,
-                  fill = arm), alpha = 0.10) +
+                  fill = arm), alpha = 0.08, show.legend = FALSE) +
     geom_hline(yintercept = 0, colour = "grey60", linewidth = 0.4) +
+    # The dashed rules and the tint keep out of the legend: a key is
+    # clearer showing the median's solid line alone than showing all
+    # three of a comparator's marks laid over each other.
     geom_hline(data = ends, aes(yintercept = lower, colour = arm),
-               linetype = "dashed", linewidth = 0.4, alpha = 0.35) +
+               linetype = "dashed", linewidth = 0.4, alpha = 0.35,
+               show.legend = FALSE) +
     geom_hline(data = ends, aes(yintercept = upper, colour = arm),
-               linetype = "dashed", linewidth = 0.4, alpha = 0.35) +
+               linetype = "dashed", linewidth = 0.4, alpha = 0.35,
+               show.legend = FALSE) +
     # `ends` rather than `lines`: the arm a comparison is against is at
     # nothing by construction, and the grey rule at zero says so.
     geom_hline(data = ends, aes(yintercept = median, colour = arm),

@@ -213,7 +213,10 @@ grid_figure <- function(key, d = grid_data(key), ylim = NULL,
           strip.text = element_text(size = base - 1),
           strip.text.y = if (row_strips) element_text(size = base - 1)
                          else element_blank(),
-          plot.title = element_text(size = base + 1, hjust = 0.5),
+          # The title carries the letter beside it, so the room below
+          # it is the room between both of them and the strips.
+          plot.title = element_text(size = base + 1, hjust = 0.5,
+                                    margin = margin(b = 12)),
           # A grid with no scale of its own gives up the room for one,
           # so its panels start at its rule.
           axis.text.y = if (yticks) element_text() else element_blank(),

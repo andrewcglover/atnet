@@ -137,42 +137,81 @@ series <- cached$series
 values <- cached$values
 t0 <- cached$t0
 
-# Split each line into the stretch all arms share and the arms' own. The
-# daily lines part on the day the arms do; the rolling lines and their bands
-# part half a year earlier, where the centred window first reaches that day.
-# Lines and bands part together, so the colours take over from the grey with
-# no gap.
+# Everything before the arms part is drawn in grey, the rolling lines
+# included. A centred 365-day mean reaches the arms half a year early, so
+# over the second half of 2024 the grey rolling lines do fan out a little;
+# that half year still belongs to the old nets, which hold the majority of
+# the window until the last day of 2024 (182 arm days of 365 on the 30th,
+# 183 on the 31st). So the colours take over on the day the arms part, and
+# the fan before it reads as what it is: the window filling up, not a
+# change of net. The two stretches share their end day, so the lines join.
 split_shared <- function(s, value, shared_until) {
   s$value <- s[[value]]
   bind_rows(
-    s %>% filter(arm == "none", timestep <= shared_until) %>%
-      mutate(key = "shared"),
+    s %>% filter(timestep <= shared_until) %>% mutate(key = "shared"),
     s %>% filter(timestep >= shared_until) %>% mutate(key = arm)
   ) %>%
-    mutate(key = factor(key, levels = c("shared", arms$arm)))
+    mutate(key = factor(key, levels = c("shared", arms$arm)),
+           grp = paste(key, arm))
 }
 daily <- split_shared(series, "daily", t0 - 1L)
-rolling <- split_shared(series, "roll_med", t0 - 1L - half_window)
-bands <- rolling %>% filter(!is.na(roll_lo))
+rolling <- split_shared(series, "roll_med", t0 - 1L)
+
+# One grey band over the shared stretch, not one per arm: translucent bands
+# laid on top of each other would read as a darker block where they are
+# merely identical. It is the union of the arms' bands, so it is an
+# envelope rather than an interval -- which is immaterial here, since the
+# arms differ by almost nothing until they part.
+shared_band <- function(display_arms) {
+  rolling %>%
+    filter(key == "shared", arm %in% display_arms, !is.na(roll_lo)) %>%
+    group_by(region, timestep, year) %>%
+    summarise(roll_lo = min(roll_lo), roll_hi = max(roll_hi), .groups = "drop") %>%
+    mutate(key = factor("shared", levels = c("shared", arms$arm)),
+           grp = "shared")
+}
+band_data <- function(display_arms) {
+  bind_rows(
+    shared_band(display_arms),
+    rolling %>% filter(key != "shared", arm %in% display_arms, !is.na(roll_lo))
+  )
+}
+
+# The lines of one figure, for the arms it shows. Over the shared stretch
+# the daily series is one line, the arms being the same simulation there,
+# while the rolling series keeps one line per arm, since a centred window
+# has started to tell them apart.
+line_data <- function(d, display_arms, shared_one) {
+  shared <- d %>% filter(key == "shared")
+  shared <- if (shared_one) shared %>% filter(arm == arms$arm[1])
+            else shared %>% filter(arm %in% display_arms)
+  bind_rows(shared, d %>% filter(key != "shared", arm %in% display_arms))
+}
 y_max <- 10 * ceiling(max(c(series$daily, series$roll_hi), na.rm = TRUE) / 10)
 
 region_panel <- function(region, keys, show_daily, show_bands) {
   pos <- geo_grid[geo_grid$region == region, ]
   show_x <- !any(geo_grid$row == pos$row + 1 & geo_grid$col == pos$col)
   show_y <- !any(geo_grid$row == pos$row & geo_grid$col == pos$col - 1)
+  # The grey stretch is kept only for the arms this figure shows, so the
+  # fan before the arms part has as many lines as the colours after it.
+  display_arms <- setdiff(keys, "shared")
   pick <- function(d) d[d$region == region & d$key %in% keys, ]
-  p <- ggplot(mapping = aes(year, value, colour = key, fill = key, group = key)) +
+  p <- ggplot(mapping = aes(year, value, colour = key, fill = key, group = grp)) +
     geom_vline(xintercept = model_year(t0), linetype = "dashed",
                colour = "grey40", linewidth = 0.4)
   if (show_bands) {
-    p <- p + geom_ribbon(data = pick(bands), aes(ymin = roll_lo, ymax = roll_hi),
+    p <- p + geom_ribbon(data = pick(band_data(display_arms)),
+                         aes(ymin = roll_lo, ymax = roll_hi),
                          colour = NA, alpha = 0.2)
   }
   if (show_daily) {
-    p <- p + geom_line(data = pick(daily), linewidth = 0.4, alpha = 0.2)
+    p <- p + geom_line(data = pick(line_data(daily, display_arms, TRUE)),
+                       linewidth = 0.4, alpha = 0.2)
   }
   p +
-    geom_line(data = pick(rolling), linewidth = 0.8, na.rm = TRUE) +
+    geom_line(data = pick(line_data(rolling, display_arms, FALSE)),
+              linewidth = 0.8, na.rm = TRUE) +
     facet_wrap(~ region) +
     scale_colour_manual(values = key_colours, guide = "none") +
     scale_fill_manual(values = key_colours, guide = "none") +

@@ -479,9 +479,12 @@ scaled <- function(p, s = 0.9) {
 # legend drops to the empty cell south of Kayes and west of Sikasso.
 # `nat_bands` lets the national inset show its bands while the regions
 # show their medians: the country has room for them where nine small
-# panels do not.
+# panels do not. `nat_keys` lets it show fewer arms than they do, since
+# seven bands laid over each other are a muddle however much room there
+# is.
 build_figure <- function(keys, legend_title, show_daily, show_bands,
-                         national = FALSE, nat_bands = show_bands) {
+                         national = FALSE, nat_bands = show_bands,
+                         nat_keys = keys) {
   region_areas <- do.call(c, lapply(seq_len(nrow(geo_grid)), function(i) {
     area(geo_grid$row[i], geo_grid$col[i] + 1)
   }))
@@ -504,7 +507,7 @@ build_figure <- function(keys, legend_title, show_daily, show_bands,
                 region_areas)
     plots <- c(fixed,
                list(wrap_elements(full = scaled(national_panel(
-                      keys, show_daily = show_daily && !nat_bands,
+                      nat_keys, show_daily = show_daily && !nat_bands,
                       show_bands = nat_bands))),
                     wrap_elements(full = legend_panel(keys, legend_title,
                                                       show_bands, tag = NULL)),
@@ -555,11 +558,14 @@ save_figure(build_figure(c(band_arms, "shared"), NULL,
                          show_daily = FALSE, show_bands = TRUE,
                          national = TRUE),
             "fig5_national_bands")
-# The medians figure, but with the national inset banded: all seven arms
-# throughout, the regions by their medians and the country with its 95%
-# intervals as well. The legend is the medians one, so what the shading
-# is belongs in the caption.
+# The medians figure, but with the national inset banded: the regions by
+# their medians, all seven arms, and the country with its 95% intervals
+# as well. The inset keeps five of the arms, the four the banded figure
+# shows and no future nets, whose band sits clear above the rest; all
+# seven would lay their bands over each other. The legend is the medians
+# one, so what the shading is belongs in the caption.
 save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
                          show_bands = FALSE, national = TRUE,
-                         nat_bands = TRUE),
+                         nat_bands = TRUE,
+                         nat_keys = c("none", band_arms, "shared")),
             "fig5_national_medians_bandinset")

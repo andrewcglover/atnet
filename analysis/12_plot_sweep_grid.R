@@ -198,7 +198,10 @@ grid_figure <- function(key, d = grid_data(key), ylim = NULL,
           panel.grid.minor = element_blank(),
           strip.text = element_text(size = 11),
           legend.position = "bottom",
-          axis.ticks.x = element_blank())
+          axis.ticks.x = element_blank(),
+          # The columns of a row carry one backdrop between them, so
+          # they run together rather than sitting apart.
+          panel.spacing.x = unit(0, "pt"))
 }
 
 save_figure <- function(fig, stem, width, height) {
@@ -234,9 +237,13 @@ combined <- patchwork::wrap_plots(
     key <- names(quantities)[i]
     grid_figure(key, parts[[key]], ylim = shared, legend = i == 1L)
   }),
-  ncol = 2, guides = "collect") +
+  nrow = 1, guides = "collect") +
   patchwork::plot_annotation(tag_levels = "A") &
   ggplot2::theme(legend.position = "bottom",
-                 plot.tag = ggplot2::element_text(size = 20, face = "bold"))
+                 plot.tag = ggplot2::element_text(size = 20, face = "bold"),
+                 # Room between the grids: with none, the next grid's y
+                 # title runs into the last one's retention strips.
+                 plot.margin = ggplot2::margin(5, 22, 5, 22))
+# Four grids in a row, each about two thirds the width it has on its own.
 save_figure(combined, file.path(out_dir, sprintf("sweep_grid_all_%s", form)),
-            20, 22)
+            28, 13)

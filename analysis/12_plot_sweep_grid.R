@@ -151,7 +151,7 @@ grid_range <- function(d) {
 grid_figure <- function(key, d = grid_data(key), ylim = NULL,
                         legend = TRUE, title = NULL, ylab = NULL,
                         row_strips = TRUE, base = 12, yticks = TRUE,
-                        tag = NULL, border = FALSE) {
+                        tag = NULL, border = FALSE, title_hjust = 0.5) {
   # Dropping the tick labels says the scale is somebody else's to read;
   # that is only true when one has been handed in.
   stopifnot(yticks || !is.null(ylim))
@@ -215,7 +215,7 @@ grid_figure <- function(key, d = grid_data(key), ylim = NULL,
                          else element_blank(),
           # The title carries the letter beside it, so the room below
           # it is the room between both of them and the strips.
-          plot.title = element_text(size = base + 1, hjust = 0.5,
+          plot.title = element_text(size = base + 1, hjust = title_hjust,
                                     margin = margin(b = 12)),
           # A grid with no scale of its own gives up the room for one,
           # so its panels start at its rule.
@@ -306,3 +306,38 @@ combined <- patchwork::wrap_plots(
 # Four grids in a row, each about two thirds the width it has on its own.
 save_figure(combined, file.path(out_dir, sprintf("sweep_grid_all_%s", form)),
             14, 10.5)
+
+# A second arrangement of the same four, kept alongside the first. No
+# rule round a grid, so nothing encloses A's scale or D's strips; a line
+# between one grid and the next does the separating instead. The letter
+# joins its title rather than standing over the grid in large type, and
+# the title moves to the left to carry it.
+separated <- lapply(seq_along(quantities), function(i) {
+  key <- names(quantities)[i]
+  grid_figure(key, parts[[key]], ylim = shared, legend = i == 1L,
+              title = bquote(bold(.(LETTERS[i])) ~~
+                               .(paste0("Comparator: ", against[[key]]))),
+              title_hjust = 0,
+              ylab = if (i == 1L)
+                "Clinical cases averted per 1,000 people per year vs comparator"
+              else FALSE,
+              row_strips = i == length(quantities), base = 10,
+              yticks = i == 1L)
+})
+rule <- function() {
+  patchwork::wrap_elements(full = grid::linesGrob(
+    x = grid::unit(c(0.5, 0.5), "npc"), y = grid::unit(c(0.02, 0.93), "npc"),
+    gp = grid::gpar(col = "grey40", lwd = 1)))
+}
+save_figure(
+  patchwork::wrap_plots(
+    c(separated[1], list(rule()), separated[2], list(rule()), separated[3],
+      list(rule()), separated[4], list(patchwork::guide_area())),
+    # Patchwork fills a design's areas in alphabetical order, not left
+    # to right, so the letters run in the order the plots are given:
+    # grid, rule, grid, rule, grid, rule, grid, then the legend's row.
+    design = "ABCDEFG\nHHHHHHH",
+    widths = c(1, 0.012, 1, 0.012, 1, 0.012, 1),
+    heights = c(1, 0.05), guides = "collect") &
+    ggplot2::theme(plot.margin = ggplot2::margin(4, 0, 4, 0)),
+  file.path(out_dir, sprintf("sweep_grid_all_sep_%s", form)), 14, 10.5)

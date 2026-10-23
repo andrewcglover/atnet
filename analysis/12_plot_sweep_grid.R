@@ -151,7 +151,7 @@ grid_range <- function(d) {
 grid_figure <- function(key, d = grid_data(key), ylim = NULL,
                         legend = TRUE, title = NULL, ylab = NULL,
                         row_strips = TRUE, base = 12, yticks = TRUE,
-                        tag = NULL) {
+                        tag = NULL, border = FALSE) {
   # Dropping the tick labels says the scale is somebody else's to read;
   # that is only true when one has been handed in.
   stopifnot(yticks || !is.null(ylim))
@@ -167,7 +167,7 @@ grid_figure <- function(key, d = grid_data(key), ylim = NULL,
     geom_rect(data = ends, inherit.aes = FALSE,
               aes(xmin = -Inf, xmax = Inf, ymin = lower, ymax = upper,
                   fill = arm), alpha = 0.10) +
-    geom_hline(yintercept = 0, colour = "grey35", linewidth = 0.4) +
+    geom_hline(yintercept = 0, colour = "grey60", linewidth = 0.4) +
     geom_hline(data = ends, aes(yintercept = lower, colour = arm),
                linetype = "dashed", linewidth = 0.4, alpha = 0.35) +
     geom_hline(data = ends, aes(yintercept = upper, colour = arm),
@@ -222,6 +222,12 @@ grid_figure <- function(key, d = grid_data(key), ylim = NULL,
           axis.ticks.length.y = if (yticks) unit(2.75, "pt") else unit(0, "pt"),
           legend.position = "bottom",
           axis.ticks.x = element_blank(),
+          # The rule belongs to a grid, so it is set here and not over
+          # the whole figure, which would draw one round everything and
+          # another round the legend.
+          plot.background = if (border)
+            element_rect(colour = "grey40", fill = NA, linewidth = 0.4)
+          else element_blank(),
           # The columns of a row carry one backdrop between them, so
           # they run together rather than sitting apart.
           panel.spacing.x = unit(0, "pt"))
@@ -273,7 +279,7 @@ grids <- lapply(seq_along(quantities), function(i) {
                 "Clinical cases averted per 1,000 people per year vs comparator"
               else FALSE,
               row_strips = i == length(quantities), base = 10,
-              yticks = i == 1L, tag = LETTERS[i])
+              yticks = i == 1L, tag = LETTERS[i], border = TRUE)
 })
 # The legend gets a row of its own, below the grids, so that their rules
 # close under them instead of reaching down around it. The letters are
@@ -288,12 +294,10 @@ combined <- patchwork::wrap_plots(
   ggplot2::theme(plot.tag = ggplot2::element_text(size = 20, face = "bold",
                                                   hjust = 0, vjust = 1),
                  plot.tag.position = c(0.004, 0.997),
-                 # The grids meet, each inside its own rule: nothing
-                 # between them to collide, B to D having no y labels
-                 # and A to C no retention strips.
-                 plot.margin = ggplot2::margin(4, 0, 4, 0),
-                 plot.background = ggplot2::element_rect(
-                   colour = "grey40", fill = NA, linewidth = 0.4))
+                 # The grids meet: with no y labels on B to D and no
+                 # retention strips on A to C there is nothing between
+                 # them to collide.
+                 plot.margin = ggplot2::margin(4, 0, 4, 0))
 # Four grids in a row, each about two thirds the width it has on its own.
 save_figure(combined, file.path(out_dir, sprintf("sweep_grid_all_%s", form)),
             14, 10.5)

@@ -76,7 +76,7 @@ itns <- all[all$arm %in% itn_arms, ]
 
 quantities <- c(vs_nonets = "averted_per1000", vs_pyr = "vs_pyr",
                 vs_pyr_pbo = "vs_pyr_pbo", vs_pyr_cfp = "vs_pyr_cfp")
-against <- c(vs_nonets = "no future nets", vs_pyr = "Pyr",
+against <- c(vs_nonets = "no future nets", vs_pyr = "Pyr-only",
              vs_pyr_pbo = "Pyr-PBO", vs_pyr_cfp = "Pyr-CFP")
 
 # Median and 95% interval of one column, by whatever else is given.
@@ -149,7 +149,8 @@ grid_range <- function(d) {
 }
 
 grid_figure <- function(key, d = grid_data(key), ylim = NULL,
-                        legend = TRUE) {
+                        legend = TRUE, title = NULL, ylab = NULL,
+                        row_strips = TRUE, base = 12) {
   points <- d$points; lines <- d$lines; ends <- d$ends
 
   ggplot(points, aes(arm, median, colour = arm)) +
@@ -162,12 +163,14 @@ grid_figure <- function(key, d = grid_data(key), ylim = NULL,
     geom_rect(data = ends, inherit.aes = FALSE,
               aes(xmin = -Inf, xmax = Inf, ymin = lower, ymax = upper,
                   fill = arm), alpha = 0.10) +
-    geom_hline(yintercept = 0, colour = "grey75", linewidth = 0.3) +
+    geom_hline(yintercept = 0, colour = "grey35", linewidth = 0.4) +
     geom_hline(data = ends, aes(yintercept = lower, colour = arm),
                linetype = "dashed", linewidth = 0.4, alpha = 0.35) +
     geom_hline(data = ends, aes(yintercept = upper, colour = arm),
                linetype = "dashed", linewidth = 0.4, alpha = 0.35) +
-    geom_hline(data = lines, aes(yintercept = median, colour = arm),
+    # `ends` rather than `lines`: the arm a comparison is against is at
+    # nothing by construction, and the grey rule at zero says so.
+    geom_hline(data = ends, aes(yintercept = median, colour = arm),
                linewidth = 0.5, alpha = 0.65) +
     geom_linerange(aes(ymin = lower, ymax = upper), linewidth = 0.9) +
     geom_point(size = 2.4) +
@@ -190,13 +193,18 @@ grid_figure <- function(key, d = grid_data(key), ylim = NULL,
     scale_fill_manual(values = arm_colours, guide = "none") +
     scale_x_discrete(labels = NULL, breaks = NULL) +
     coord_cartesian(ylim = ylim) +
-    labs(x = NULL,
-         y = sprintf("Clinical cases averted per 1,000 people per year, vs %s",
-                     against[[key]])) +
-    theme_minimal(base_size = 12) +
+    labs(x = NULL, title = title,
+         y = if (is.null(ylab))
+           sprintf("Clinical cases averted per 1,000 people per year vs %s",
+                   against[[key]])
+         else if (isFALSE(ylab)) NULL else ylab) +
+    theme_minimal(base_size = base) +
     theme(panel.grid.major.x = element_blank(),
           panel.grid.minor = element_blank(),
-          strip.text = element_text(size = 11),
+          strip.text = element_text(size = base - 1),
+          strip.text.y = if (row_strips) element_text(size = base - 1)
+                         else element_blank(),
+          plot.title = element_text(size = base + 1),
           legend.position = "bottom",
           axis.ticks.x = element_blank(),
           # The columns of a row carry one backdrop between them, so
@@ -235,7 +243,16 @@ message(sprintf("Shared y scale: %.0f to %.0f", shared[1], shared[2]))
 combined <- patchwork::wrap_plots(
   lapply(seq_along(quantities), function(i) {
     key <- names(quantities)[i]
-    grid_figure(key, parts[[key]], ylim = shared, legend = i == 1L)
+    # One y label, on A, naming the quantity without naming a
+    # comparison; each grid says which comparison it is in its title.
+    # The retention strips are on D alone: the rows line up across all
+    # four, so one set of labels does for them.
+    grid_figure(key, parts[[key]], ylim = shared, legend = i == 1L,
+                title = paste("vs", against[[key]]),
+                ylab = if (i == 1L)
+                  "Clinical cases averted per 1,000 people per year vs comparator"
+                else FALSE,
+                row_strips = i == length(quantities), base = 10)
   }),
   nrow = 1, guides = "collect") +
   patchwork::plot_annotation(tag_levels = "A") &
@@ -246,4 +263,4 @@ combined <- patchwork::wrap_plots(
                  plot.margin = ggplot2::margin(5, 22, 5, 22))
 # Four grids in a row, each about two thirds the width it has on its own.
 save_figure(combined, file.path(out_dir, sprintf("sweep_grid_all_%s", form)),
-            28, 13)
+            20, 10.5)

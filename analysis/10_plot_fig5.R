@@ -15,13 +15,24 @@
 # are the median and 95% interval across rows (see
 # analysis/09_summarise_projections.R).
 #
-# Two versions, written to outputs/figures/<first run folder's name>/, with
-# the antimalarial's decay form (exp or smoothcompact) in the file name:
+# Two layouts, each in two versions, written to
+# outputs/figures/<first run folder's name>/ with the antimalarial's decay
+# form (exp or smoothcompact) in the file name:
 #   fig5_medians_<form>.(png|pdf)  medians for all seven arms (main text)
 #   fig5_bands_<form>.(png|pdf)    medians and 95% intervals for Pyr-CFP,
 #                            ATN, Pyr-ATN and Pyr-CFP-ATN (appendix); each
 #                            band is for one arm on its own, although the
 #                            arms are paired within rows
+#   fig5_national_medians_<form>, fig5_national_bands_<form>
+#                            the same two, with the legend moved to the
+#                            empty cell in the bottom left and the top
+#                            left corner given to the national series
+#
+# The national series is not an average of the regional ones: each
+# region's daily counts are scaled to its real population (the site
+# file's) before they are added up and the rate is formed, exactly as
+# national_values() does for panel B, so the two national panels weight
+# the regions identically.
 #
 # NB for the caption: the bold lines are a CENTRED 365-day mean, so they
 # begin to separate half a year before the arms do. The arms themselves part
@@ -111,16 +122,10 @@ x_from <- 2023.95
 x_to <- 2032
 
 
-# Daily and rolling medians (and the rolling 95% interval) across rows for
-# one region, each arm's series being 2022-24 followed by the arm.
-region_series <- function(region) {
-  message("  reading ", region)
-  x <- read_projection_jobs(run_dirs, regions = region, columns = "pfpr2to10")
-  pre <- x[x$arm == "2022-2024", ]
-  x <- rbind(x[x$arm %in% arms$arm, ],
-             do.call(rbind, lapply(arms$arm, function(a) transform(pre, arm = a))))
+# Daily and rolling medians, and the rolling 95% interval, across rows.
+# Each arm's series is the shared 2022-24 stretch followed by the arm.
+summarise_series <- function(x, label) {
   x %>%
-    arrange(draw, arm, timestep) %>%
     group_by(draw, arm) %>%
     mutate(roll = zoo::rollmean(100 * pfpr2to10, 365L, fill = NA,
                                 align = "center")) %>%
@@ -130,22 +135,99 @@ region_series <- function(region) {
               roll_lo = quantile(roll, 0.025, na.rm = TRUE, names = FALSE),
               roll_hi = quantile(roll, 0.975, na.rm = TRUE, names = FALSE),
               .groups = "drop") %>%
-    mutate(region = region, year = model_year(timestep))
+    mutate(region = label, year = model_year(timestep))
 }
 
-# Everything read from the runs, in one place: the regional series for A,
-# the per-row totals for B, and the day the arms part. Reading 640 rows for
-# nine regions takes some minutes, so it is kept and reused.
+# One region's daily counts, the 2022-24 stretch repeated for every arm,
+# sorted so that regions line up with each other row for row.
+region_counts <- function(region) {
+  x <- read_projection_jobs(run_dirs, regions = region,
+                            columns = c("n_detect_lm_730_3649",
+                                        "n_age_730_3649"))
+  x <- x[c("timestep", "arm", "draw", "n_detect_lm_730_3649",
+           "n_age_730_3649")]
+  pre <- x[x$arm == "2022-2024", ]
+  x <- rbind(x[x$arm %in% arms$arm, ],
+             do.call(rbind, lapply(arms$arm, function(a) transform(pre, arm = a))))
+  x[order(x$draw, x$arm, x$timestep), ]
+}
+
+# Every region's own series, and the national one, from a single pass over
+# the files: PfPR2-10 is n_detect_lm_730_3649 / n_age_730_3649 exactly, so
+# the counts give both. The national series adds up population-scaled
+# counts before forming the rate, as national_values() does for the
+# cycle, and takes the median across rows afterwards -- a median of
+# regional medians would be a different quantity and not the country's.
+# The scale is each region's real population over its simulated one, which
+# is read from the cycle totals so that panel A's national line and panel
+# B's national bars weight the regions identically.
+read_all_series <- function(values) {
+  pop <- region_populations(site)
+  sim_pop <- 365 * values$person_years / values$days
+  sim_key <- paste(region_tag(values$region), values$draw, values$arm)
+  regional <- list()
+  nat_detect <- NULL; nat_age <- NULL; shape <- NULL
+  for (rg in geo_grid$region) {
+    message("  reading ", rg)
+    x <- region_counts(rg)
+    regional[[rg]] <- summarise_series(
+      transform(x, pfpr2to10 = n_detect_lm_730_3649 / n_age_730_3649), rg)
+
+    # Blocks of one (row, arm) each, in the order x is sorted in, so the
+    # per-block scale can simply be repeated down the column.
+    draws <- sort(unique(x$draw)); use_arms <- sort(unique(x$arm))
+    days <- nrow(x) / (length(draws) * length(use_arms))
+    this_shape <- list(draws = draws, arms = use_arms, days = days,
+                       timesteps = sort(unique(x$timestep)))
+    stopifnot(days == length(this_shape$timesteps))
+    if (is.null(shape)) shape <- this_shape
+    stopifnot(identical(shape, this_shape))   # regions must line up
+
+    blocks <- expand.grid(arm = use_arms, draw = draws,
+                          stringsAsFactors = FALSE)
+    scale <- pop$pop[match(region_tag(rg), region_tag(pop$region))] /
+      sim_pop[match(paste(region_tag(rg), blocks$draw, blocks$arm), sim_key)]
+    stopifnot(!anyNA(scale))
+    scale <- rep(scale, each = days)
+    if (is.null(nat_detect)) {
+      nat_detect <- scale * x$n_detect_lm_730_3649
+      nat_age <- scale * x$n_age_730_3649
+    } else {
+      nat_detect <- nat_detect + scale * x$n_detect_lm_730_3649
+      nat_age <- nat_age + scale * x$n_age_730_3649
+    }
+    rm(x)
+  }
+  message("  national")
+  nat <- data.frame(
+    draw = rep(shape$draws, each = length(shape$arms) * shape$days),
+    arm = rep(rep(shape$arms, each = shape$days), times = length(shape$draws)),
+    timestep = rep(shape$timesteps,
+                   times = length(shape$draws) * length(shape$arms)),
+    pfpr2to10 = nat_detect / nat_age
+  )
+  list(series = bind_rows(regional), nat_series = summarise_series(nat, country))
+}
+
+# Everything read from the runs, in one place: the regional and national
+# series for A, the per-row totals for B, and the day the arms part.
+# Reading 640 rows for nine regions takes some minutes, so it is kept and
+# reused. `made` is bumped when what is kept changes shape, so an older
+# cache is read afresh rather than half-used.
 cycle <- campaign_cycle(settings$future_campaign_days)
 cached <- if (!refresh && file.exists(cache_file)) readRDS(cache_file)
-if (is.null(cached) || !identical(cached$run_dirs, run_dirs) ||
-    !identical(cached$cycle, cycle)) {
+if (is.null(cached) || !identical(cached$made, 2L) ||
+    !identical(cached$run_dirs, run_dirs) || !identical(cached$cycle, cycle)) {
   message("Reading ", paste(basename(run_dirs), collapse = " + "), " ...")
+  vals <- projection_row_values(run_dirs, cycle["from"], cycle["to"])
+  both <- read_all_series(vals)
   cached <- list(
+    made = 2L,
     run_dirs = run_dirs,
     cycle = cycle,
-    series = bind_rows(lapply(geo_grid$region, region_series)),
-    values = projection_row_values(run_dirs, cycle["from"], cycle["to"]),
+    series = both$series,
+    nat_series = both$nat_series,
+    values = vals,
     t0 = min(readRDS(projection_job_files(run_dirs)$file[1])$results$timestep)
   )
   saveRDS(cached, cache_file)
@@ -157,6 +239,7 @@ if (is.null(cached) || !identical(cached$run_dirs, run_dirs) ||
 # (they were worked out over the whole series) and saves ggplot discarding
 # the same rows, with a warning, once per panel.
 series <- cached$series %>% filter(year >= x_from)
+nat_series <- cached$nat_series %>% filter(year >= x_from)
 values <- cached$values
 t0 <- cached$t0
 
@@ -188,24 +271,26 @@ split_shared <- function(s, value, shared_until) {
 }
 daily <- split_shared(series, "daily", t0 - 1L)
 rolling <- split_shared(series, "roll_med", t0 - 1L)
+nat_daily <- split_shared(nat_series, "daily", t0 - 1L)
+nat_rolling <- split_shared(nat_series, "roll_med", t0 - 1L)
 
 # One grey band over the shared stretch, not one per arm: translucent bands
 # laid on top of each other would read as a darker block where they are
 # merely identical. It is the union of the arms' bands, so it is an
 # envelope rather than an interval -- which is immaterial here, since the
 # arms differ by almost nothing until they part.
-shared_band <- function(display_arms) {
-  rolling %>%
+shared_band <- function(roll, display_arms) {
+  roll %>%
     filter(key == "shared", arm %in% display_arms, !is.na(roll_lo)) %>%
     group_by(region, timestep, year) %>%
     summarise(roll_lo = min(roll_lo), roll_hi = max(roll_hi), .groups = "drop") %>%
     mutate(key = factor("shared", levels = c("shared", arms$arm)),
            grp = "shared")
 }
-band_data <- function(display_arms) {
+band_data <- function(roll, display_arms) {
   order_groups(bind_rows(
-    shared_band(display_arms),
-    rolling %>% filter(key != "shared", arm %in% display_arms, !is.na(roll_lo))
+    shared_band(roll, display_arms),
+    roll %>% filter(key != "shared", arm %in% display_arms, !is.na(roll_lo))
   ))
 }
 
@@ -223,7 +308,7 @@ line_data <- function(d, display_arms, shared_one) {
 # The y scale is shared by every panel, and set by what is on show.
 y_max <- 10 * ceiling(max(c(series$daily, series$roll_hi), na.rm = TRUE) / 10)
 
-region_panel <- function(region, keys, show_daily, show_bands) {
+region_panel <- function(region, keys, show_daily, show_bands, tag = NULL) {
   pos <- geo_grid[geo_grid$region == region, ]
   show_x <- !any(geo_grid$row == pos$row + 1 & geo_grid$col == pos$col)
   show_y <- !any(geo_grid$row == pos$row & geo_grid$col == pos$col - 1)
@@ -237,7 +322,7 @@ region_panel <- function(region, keys, show_daily, show_bands) {
     geom_vline(xintercept = model_year(t0), linetype = "dashed",
                colour = "grey40", linewidth = 0.4)
   if (show_bands) {
-    p <- p + geom_ribbon(data = pick(band_data(display_arms)),
+    p <- p + geom_ribbon(data = pick(band_data(rolling, display_arms)),
                          aes(ymin = roll_lo, ymax = roll_hi),
                          colour = NA, alpha = 0.2)
   }
@@ -253,16 +338,59 @@ region_panel <- function(region, keys, show_daily, show_bands) {
     scale_fill_manual(values = key_colours, guide = "none") +
     scale_x_continuous(breaks = seq(2024, 2030, 2), limits = c(x_from, x_to)) +
     scale_y_continuous(breaks = seq(0, 100, 20), limits = c(0, y_max)) +
-    labs(x = NULL, y = NULL) +
+    labs(x = NULL, y = NULL, tag = tag) +
     theme_minimal(base_size = 13) +
     theme(axis.text.x = if (show_x) element_text() else element_blank(),
           axis.text.y = if (show_y) element_text() else element_blank(),
-          strip.text = element_text(size = 13))
+          strip.text = element_text(size = 13),
+          plot.tag = element_text(size = 18, face = "bold"))
 }
 
-# A plot holding only the legend (no data are drawn), which also carries
-# the "A" tag.
-legend_panel <- function(keys, title, show_bands) {
+# The national series, as an inset drawn like a region's panel but on its
+# own y scale, since a population-weighted national rate is well inside
+# the range the regions cover.
+national_panel <- function(keys, show_daily, show_bands) {
+  display_arms <- setdiff(keys, "shared")
+  pick <- function(d) d[d$key %in% keys, ]
+  top <- 10 * ceiling(max(c(nat_series$daily, nat_series$roll_hi),
+                          na.rm = TRUE) / 10)
+  p <- ggplot(mapping = aes(year, value, colour = key, fill = key, group = grp)) +
+    geom_vline(xintercept = campaign_years, linetype = "dotted",
+               colour = "grey45", linewidth = 0.4) +
+    geom_vline(xintercept = model_year(t0), linetype = "dashed",
+               colour = "grey40", linewidth = 0.4)
+  if (show_bands) {
+    p <- p + geom_ribbon(data = pick(band_data(nat_rolling, display_arms)),
+                         aes(ymin = roll_lo, ymax = roll_hi),
+                         colour = NA, alpha = 0.2)
+  }
+  if (show_daily) {
+    p <- p + geom_line(data = pick(line_data(nat_daily, display_arms, TRUE)),
+                       linewidth = 0.4, alpha = 0.2)
+  }
+  p +
+    geom_line(data = pick(line_data(nat_rolling, display_arms, FALSE)),
+              linewidth = 0.8, na.rm = TRUE) +
+    scale_colour_manual(values = key_colours, guide = "none") +
+    scale_fill_manual(values = key_colours, guide = "none") +
+    scale_x_continuous(breaks = seq(2024, 2030, 2), limits = c(x_from, x_to)) +
+    scale_y_continuous(breaks = seq(0, 100, 10), limits = c(0, top)) +
+    labs(x = NULL, y = expression(italic(Pf) * PR[2 - 10] * " (%)"),
+         title = country, tag = "A") +
+    theme_minimal(base_size = 13) +
+    theme(panel.grid.minor = element_blank(),
+          plot.title = element_text(size = 13),
+          plot.title.position = "plot",
+          plot.tag = element_text(size = 18, face = "bold"),
+          plot.background = element_rect(colour = "grey40", fill = NA,
+                                         linewidth = 0.4),
+          plot.margin = margin(12, 12, 12, 12))
+}
+
+# A plot holding only the legend (no data are drawn). It carries the "A"
+# tag in the layout where it sits in the top left corner, and none in the
+# one where the national inset has taken that corner.
+legend_panel <- function(keys, title, show_bands, tag = "A") {
   d <- data.frame(key = factor(keys, levels = keys), year = NA_real_,
                   value = NA_real_)
   p <- ggplot(d, aes(year, value, colour = key, fill = key))
@@ -276,7 +404,7 @@ legend_panel <- function(keys, title, show_bands) {
                         labels = key_labels[keys], name = title) +
     scale_fill_manual(values = key_colours, limits = keys,
                       labels = key_labels[keys], name = title) +
-    labs(tag = "A") +
+    labs(tag = tag) +
     theme_void(base_size = 13) +
     theme(legend.position = "inside",
           legend.position.inside = c(0.5, 0.5),
@@ -334,23 +462,52 @@ scaled <- function(p, s = 0.9) {
                  vp = grid::viewport(width = s, height = s))
 }
 
-build_figure <- function(keys, legend_title, show_daily, show_bands) {
-  design <- c(
-    area(1, 1, 4, 1),   # y title
-    area(5, 2, 5, 6),   # x title
-    area(1, 2, 2, 3),   # legend, tag A
-    area(3, 5, 4, 6),   # panel B
-    do.call(c, lapply(seq_len(nrow(geo_grid)), function(i) {
-      area(geo_grid$row[i], geo_grid$col[i] + 1)
-    }))
-  )
-  panels <- lapply(geo_grid$region, region_panel, keys = keys,
-                   show_daily = show_daily, show_bands = show_bands)
-  plots <- c(list(y_title, x_title,
-                  wrap_elements(full = legend_panel(keys, legend_title,
-                                                    show_bands)),
-                  wrap_elements(full = scaled(panel_b))),
-             panels)
+# Two layouts. In both the regions keep their places on the map and panel
+# B sits in the bottom right. In the first the legend has the top left
+# corner; in the second the national series takes that corner and the
+# legend drops to the empty cell south of Kayes and west of Sikasso.
+build_figure <- function(keys, legend_title, show_daily, show_bands,
+                         national = FALSE) {
+  region_areas <- do.call(c, lapply(seq_len(nrow(geo_grid)), function(i) {
+    area(geo_grid$row[i], geo_grid$col[i] + 1)
+  }))
+  # In the layout with the national inset the array of regions is panel B,
+  # and its letter goes on the first panel read, top left of the top row
+  # and right against the inset's corner. In the other layout the legend
+  # holds the top left corner and carries A for the figure as a whole.
+  first_region <- geo_grid$region[order(geo_grid$row, geo_grid$col)][1]
+  panels <- lapply(geo_grid$region, function(rg) {
+    region_panel(rg, keys = keys, show_daily = show_daily,
+                 show_bands = show_bands,
+                 tag = if (national && identical(rg, first_region)) "B")
+  })
+  fixed <- list(y_title, x_title)
+  if (national) {
+    design <- c(area(1, 1, 4, 1),   # y title
+                area(5, 2, 5, 6),   # x title
+                area(1, 2, 2, 3),   # national inset, tag A
+                area(4, 2),         # legend
+                area(3, 5, 4, 6),   # panel B
+                region_areas)
+    plots <- c(fixed,
+               list(wrap_elements(full = scaled(national_panel(
+                      keys, show_daily, show_bands))),
+                    wrap_elements(full = legend_panel(keys, legend_title,
+                                                      show_bands, tag = NULL)),
+                    wrap_elements(full = scaled(panel_b + labs(tag = "C")))),
+               panels)
+  } else {
+    design <- c(area(1, 1, 4, 1),   # y title
+                area(5, 2, 5, 6),   # x title
+                area(1, 2, 2, 3),   # legend, tag A
+                area(3, 5, 4, 6),   # panel B
+                region_areas)
+    plots <- c(fixed,
+               list(wrap_elements(full = legend_panel(keys, legend_title,
+                                                      show_bands)),
+                    wrap_elements(full = scaled(panel_b))),
+               panels)
+  }
   wrap_plots(plots, design = design, widths = c(0.12, rep(1, 5)),
              heights = c(rep(1, 4), 0.1))
 }
@@ -370,10 +527,18 @@ save_figure <- function(fig, name) {
   message("Saved: ", stem, ".(png|pdf)")
 }
 
+# The two layouts, each in its two versions. Neither legend is titled:
+# what the bands are is left to the caption.
 save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
                          show_bands = FALSE),
             "fig5_medians")
-save_figure(build_figure(c(band_arms, "shared"),
-                         "Median and 95% uncertainty\ninterval across draws",
+save_figure(build_figure(c(band_arms, "shared"), NULL,
                          show_daily = FALSE, show_bands = TRUE),
             "fig5_bands")
+save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
+                         show_bands = FALSE, national = TRUE),
+            "fig5_national_medians")
+save_figure(build_figure(c(band_arms, "shared"), NULL,
+                         show_daily = FALSE, show_bands = TRUE,
+                         national = TRUE),
+            "fig5_national_bands")

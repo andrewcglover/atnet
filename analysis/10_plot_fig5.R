@@ -307,7 +307,7 @@ panel_b <- ggplot(averted, aes(median, label, colour = arm)) +
   scale_colour_manual(values = key_colours, guide = "none") +
   scale_x_continuous(limits = c(min(0, averted$lower), NA),
                      expand = expansion(mult = c(0, 0.05))) +
-  labs(x = "Clinical cases averted per 1,000\npeople per year, vs no future nets",
+  labs(x = "Clinical cases averted per 1,000\npeople per year vs no future nets",
        y = NULL, tag = "B") +
   theme_minimal(base_size = 13) +
   theme(panel.grid.major.y = element_blank(),

@@ -7,7 +7,10 @@
 projection_row_values(dir, from, to, regions = NULL, rows = NULL)
 }
 \arguments{
-\item{dir}{The run folder, e.g. \code{outputs/projections/mli_hldrawn_dummy}.}
+\item{dir}{The run folder, e.g. \code{outputs/projections/mli_hldrawn_dummy}.
+Several folders may be named, as a character vector, when one figure's
+arms are spread over more than one run: see \code{\link[=read_projection_jobs]{read_projection_jobs()}}
+for the rule that settles which folder an arm is taken from.}
 
 \item{from, to}{The first and last timestep of the period, both included.}
 
@@ -16,9 +19,10 @@ projection_row_values(dir, from, to, regions = NULL, rows = NULL)
 \item{rows}{Optional draws-table rows to keep.}
 }
 \value{
-As \code{\link[=period_counts]{period_counts()}}, for every file read.
+As \code{\link[=period_counts]{period_counts()}}, for every region and row read.
 }
 \description{
-Applies \code{\link[=period_counts]{period_counts()}} to each job file in turn, so that only one file
-is held in memory at a time.
+Applies \code{\link[=period_counts]{period_counts()}} to one region and row at a time, so that only
+those files are held in memory at once. Several run folders may be named,
+with the same rule as \code{\link[=read_projection_jobs]{read_projection_jobs()}}.
 }

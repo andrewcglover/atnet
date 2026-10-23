@@ -34,33 +34,42 @@ region_tag <- function(region) {
 #' List the job files of a projection run
 #'
 #' @param dir The run folder, e.g. `outputs/projections/mli_hldrawn_dummy`.
+#'   Several folders may be named, as a character vector, when one figure's
+#'   arms are spread over more than one run: see [read_projection_jobs()]
+#'   for the rule that settles which folder an arm is taken from.
 #' @param regions Optional regions to keep, with or without accents.
 #' @param rows Optional draws-table rows to keep.
 #'
-#' @return A data frame with one line per file (`region_tag`, `draw`,
-#'   `file`), ordered by region and row. Requested rows with no file are
-#'   reported in a warning and left out. Files whose names start with
-#'   "FAKE_" (made-up data for developing plots) are read, with a warning.
+#' @return A data frame with one line per file (`region_tag`, `draw`, `run`,
+#'   `rank`, `file`), ordered by region, row and then the order the folders
+#'   were named in (`rank`). Requested rows with no file are reported in a
+#'   warning and left out. Files whose names start with "FAKE_" (made-up
+#'   data for developing plots) are read, with a warning.
 #'
 #' @export
 projection_job_files <- function(dir, regions = NULL, rows = NULL) {
-  files <- list.files(file.path(dir, "jobs"), pattern = "_row[0-9]+\\.rds$",
-                      full.names = TRUE)
-  if (!length(files)) {
-    stop("No job files in ", file.path(dir, "jobs"), call. = FALSE)
-  }
-  parts <- regmatches(basename(files),
-                      regexec("^(FAKE_)?[a-z]+_(.+)_row([0-9]+)\\.rds$",
-                              basename(files)))
-  jobs <- data.frame(
-    region_tag = vapply(parts, `[`, "", 3),
-    draw       = as.integer(vapply(parts, `[`, "", 4)),
-    file       = files
-  )
-  if (any(startsWith(basename(files), "FAKE_"))) {
-    warning("Reading FAKE data from ", dir, ": for plot layout only.",
-            call. = FALSE)
-  }
+  per_dir <- lapply(seq_along(dir), function(i) {
+    files <- list.files(file.path(dir[i], "jobs"), pattern = "_row[0-9]+\\.rds$",
+                        full.names = TRUE)
+    if (!length(files)) {
+      stop("No job files in ", file.path(dir[i], "jobs"), call. = FALSE)
+    }
+    parts <- regmatches(basename(files),
+                        regexec("^(FAKE_)?[a-z]+_(.+)_row([0-9]+)\\.rds$",
+                                basename(files)))
+    if (any(startsWith(basename(files), "FAKE_"))) {
+      warning("Reading FAKE data from ", dir[i], ": for plot layout only.",
+              call. = FALSE)
+    }
+    data.frame(
+      region_tag = vapply(parts, `[`, "", 3),
+      draw       = as.integer(vapply(parts, `[`, "", 4)),
+      run        = basename(dir[i]),
+      rank       = i,
+      file       = files
+    )
+  })
+  jobs <- do.call(rbind, per_dir)
   if (!is.null(regions)) jobs <- jobs[jobs$region_tag %in% region_tag(regions), ]
   if (!is.null(rows)) {
     tags <- if (is.null(regions)) unique(jobs$region_tag) else region_tag(regions)
@@ -77,14 +86,45 @@ projection_job_files <- function(dir, regions = NULL, rows = NULL) {
   if (!nrow(jobs)) {
     stop("No job files match the regions and rows asked for.", call. = FALSE)
   }
-  jobs <- jobs[order(jobs$region_tag, jobs$draw), ]
+  jobs <- jobs[order(jobs$region_tag, jobs$draw, jobs$rank), ]
   rownames(jobs) <- NULL
   jobs
 }
 
+# The job files of one region and row, grouped and kept in the order the
+# folders were named in.
+job_groups <- function(jobs) {
+  key <- paste(jobs$region_tag, jobs$draw)
+  split(jobs$file, factor(key, levels = unique(key)))
+}
+
+# One region and row, read from the folders that hold it. Each arm is taken
+# from the first folder named that has it, so a folder later in the list
+# only fills gaps: naming the smooth-compact run before the exponential one
+# gives the smooth-compact ATN arms with the exponential comparators, and
+# naming two halves of a split run gives their rows, one after the other.
+read_one_job <- function(files, pre = TRUE) {
+  taken <- character()
+  parts <- list()
+  for (f in files) {
+    job <- readRDS(f)
+    x <- if (pre) rbind(job$pre_projection, job$results) else job$results
+    x <- x[!x$arm %in% taken, , drop = FALSE]
+    if (!nrow(x)) next
+    taken <- c(taken, unique(x$arm))
+    parts[[length(parts) + 1L]] <- x
+  }
+  do.call(rbind, parts)
+}
+
 #' Read daily projection results
 #'
-#' Reads the job files of a run into one data frame of daily values.
+#' Reads the job files of a run into one data frame of daily values. When
+#' several run folders are named, each arm is taken from the first folder
+#' that holds it, for every region and row; a folder named later only fills
+#' gaps. So the two halves of a run split by row combine by naming both,
+#' and a run holding the ATN arms alone takes its comparators from a fuller
+#' run named after it.
 #'
 #' @inheritParams projection_job_files
 #' @param columns Optional columns to keep besides the identifiers
@@ -102,20 +142,21 @@ read_projection_jobs <- function(dir, regions = NULL, rows = NULL,
                                  columns = NULL, pre = TRUE) {
   ids <- c("timestep", "region", "arm", "draw", "seed", "year_rel")
   jobs <- projection_job_files(dir, regions, rows)
-  out <- lapply(jobs$file, function(f) {
-    job <- readRDS(f)
-    x <- if (pre) rbind(job$pre_projection, job$results) else job$results
+  out <- lapply(job_groups(jobs), function(files) {
+    x <- read_one_job(files, pre = pre)
     if (!is.null(columns)) {
       absent <- setdiff(columns, names(x))
       if (length(absent)) {
-        stop("Column(s) not in ", basename(f), ": ",
+        stop("Column(s) not in ", basename(files[1]), ": ",
              paste(absent, collapse = ", "), call. = FALSE)
       }
       x <- x[, union(intersect(ids, names(x)), columns), drop = FALSE]
     }
     x
   })
-  do.call(rbind, out)
+  out <- do.call(rbind, out)
+  rownames(out) <- NULL
+  out
 }
 
 #' The days of one campaign cycle
@@ -211,22 +252,24 @@ projection_rates <- function(v) {
 
 #' Per-row totals for a whole run
 #'
-#' Applies [period_counts()] to each job file in turn, so that only one file
-#' is held in memory at a time.
+#' Applies [period_counts()] to one region and row at a time, so that only
+#' those files are held in memory at once. Several run folders may be named,
+#' with the same rule as [read_projection_jobs()].
 #'
 #' @inheritParams projection_job_files
 #' @inheritParams period_counts
 #'
-#' @return As [period_counts()], for every file read.
+#' @return As [period_counts()], for every region and row read.
 #'
 #' @export
 projection_row_values <- function(dir, from, to, regions = NULL, rows = NULL) {
   jobs <- projection_job_files(dir, regions, rows)
-  out <- lapply(jobs$file, function(f) {
-    job <- readRDS(f)
-    period_counts(rbind(job$pre_projection, job$results), from, to)
+  out <- lapply(job_groups(jobs), function(files) {
+    period_counts(read_one_job(files), from, to)
   })
-  do.call(rbind, out)
+  out <- do.call(rbind, out)
+  rownames(out) <- NULL
+  out
 }
 
 #' Regional populations from a site file

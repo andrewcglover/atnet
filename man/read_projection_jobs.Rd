@@ -13,7 +13,10 @@ read_projection_jobs(
 )
 }
 \arguments{
-\item{dir}{The run folder, e.g. \code{outputs/projections/mli_hldrawn_dummy}.}
+\item{dir}{The run folder, e.g. \code{outputs/projections/mli_hldrawn_dummy}.
+Several folders may be named, as a character vector, when one figure's
+arms are spread over more than one run: see \code{\link[=read_projection_jobs]{read_projection_jobs()}}
+for the rule that settles which folder an arm is taken from.}
 
 \item{regions}{Optional regions to keep, with or without accents.}
 
@@ -32,5 +35,10 @@ A data frame of daily values, one line per region, row, arm and
 day.
 }
 \description{
-Reads the job files of a run into one data frame of daily values.
+Reads the job files of a run into one data frame of daily values. When
+several run folders are named, each arm is taken from the first folder
+that holds it, for every region and row; a folder named later only fills
+gaps. So the two halves of a run split by row combine by naming both,
+and a run holding the ATN arms alone takes its comparators from a fuller
+run named after it.
 }

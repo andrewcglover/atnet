@@ -7,17 +7,21 @@
 projection_job_files(dir, regions = NULL, rows = NULL)
 }
 \arguments{
-\item{dir}{The run folder, e.g. \code{outputs/projections/mli_hldrawn_dummy}.}
+\item{dir}{The run folder, e.g. \code{outputs/projections/mli_hldrawn_dummy}.
+Several folders may be named, as a character vector, when one figure's
+arms are spread over more than one run: see \code{\link[=read_projection_jobs]{read_projection_jobs()}}
+for the rule that settles which folder an arm is taken from.}
 
 \item{regions}{Optional regions to keep, with or without accents.}
 
 \item{rows}{Optional draws-table rows to keep.}
 }
 \value{
-A data frame with one line per file (\code{region_tag}, \code{draw},
-\code{file}), ordered by region and row. Requested rows with no file are
-reported in a warning and left out. Files whose names start with
-"FAKE_" (made-up data for developing plots) are read, with a warning.
+A data frame with one line per file (\code{region_tag}, \code{draw}, \code{run},
+\code{rank}, \code{file}), ordered by region, row and then the order the folders
+were named in (\code{rank}). Requested rows with no file are reported in a
+warning and left out. Files whose names start with "FAKE_" (made-up
+data for developing plots) are read, with a warning.
 }
 \description{
 List the job files of a projection run

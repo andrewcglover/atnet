@@ -15,19 +15,32 @@
 # are the median and 95% interval across rows (see
 # analysis/09_summarise_projections.R).
 #
-# Two versions, written to outputs/figures/<run folder name>/:
+# Two versions, written to outputs/figures/<first run folder's name>/:
 #   fig5_medians.(png|pdf)   medians for all seven arms (main text)
 #   fig5_bands.(png|pdf)     medians and 95% intervals for Pyr-CFP, ATN,
 #                            Pyr-ATN and Pyr-CFP-ATN (appendix); each band is
 #                            for one arm on its own, although the arms are
 #                            paired within rows
-# When the run is fake, the file names start with FAKE_ and the figure says
-# so.
 #
 # Needs every region of the site file. Reads the outputs only; it runs no
-# simulations. Uses the fake all-region run unless another run folder is
-# named:
-#   Rscript analysis/10_plot_fig5.R outputs/projections/mli_hldrawn
+# simulations. Name one run folder, or several when the arms are spread
+# over more than one run: each arm is taken from the first folder named
+# that holds it, so a folder named later only fills gaps. The exponential
+# main run, split by row:
+#   Rscript analysis/10_plot_fig5.R \
+#     outputs/projections_v2/mli_hldrawn_v2_main \
+#     outputs/projections_v2/mli_hldrawn_v2_main_161_640
+# The smooth-compact run, which holds the ATN arms alone, with the
+# comparator arms from the exponential run (they do not depend on the decay
+# form):
+#   Rscript analysis/10_plot_fig5.R \
+#     outputs/projections_v2/mli_hldrawn_v2_scmain \
+#     outputs/projections_v2/mli_hldrawn_v2_main \
+#     outputs/projections_v2/mli_hldrawn_v2_main_161_640
+#
+# Reading 640 rows for nine regions takes some minutes, so what is read is
+# cached in the output folder and reused when the same folders are named
+# again. Add the word "refresh" to the command to read the runs afresh.
 # Run with the working directory at the root of the package.
 
 devtools::load_all(quiet = TRUE)
@@ -39,21 +52,13 @@ suppressPackageStartupMessages({
 })
 
 args <- commandArgs(trailingOnly = TRUE)
-run_dir <- if (length(args)) args[1] else "outputs/fake/FAKE_mli_hldrawn_dummy"
-settings <- readRDS(file.path(run_dir, "settings.rds"))
-is_fake <- isTRUE(settings$fake)
-out_dir <- file.path("outputs", "figures", basename(run_dir))
+refresh <- "refresh" %in% args
+run_dirs <- setdiff(args, "refresh")
+if (!length(run_dirs)) stop("Name at least one run folder.", call. = FALSE)
+settings <- readRDS(file.path(run_dirs[1], "settings.rds"))
+out_dir <- file.path("outputs", "figures", basename(run_dirs[1]))
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-if (is_fake) message("FAKE data: the figures are for layout only.")
-
-# The loader warns on every call for fake data; once (above) is enough.
-quiet_fake <- function(expr) {
-  withCallingHandlers(expr, warning = function(w) {
-    if (startsWith(conditionMessage(w), "Reading FAKE")) {
-      invokeRestart("muffleWarning")
-    }
-  })
-}
+cache_file <- file.path(out_dir, "fig5_data.rds")
 
 site <- readRDS(file.path("data_private", "site_files",
                           paste0(settings$country_iso, ".rds")))
@@ -84,8 +89,8 @@ half_window <- 182L
 # Daily and rolling medians (and the rolling 95% interval) across rows for
 # one region, each arm's series being 2022-24 followed by the arm.
 region_series <- function(region) {
-  x <- quiet_fake(read_projection_jobs(run_dir, regions = region,
-                                       columns = "pfpr2to10"))
+  message("  reading ", region)
+  x <- read_projection_jobs(run_dirs, regions = region, columns = "pfpr2to10")
   pre <- x[x$arm == "2022-2024", ]
   x <- rbind(x[x$arm %in% arms$arm, ],
              do.call(rbind, lapply(arms$arm, function(a) transform(pre, arm = a))))
@@ -103,8 +108,28 @@ region_series <- function(region) {
     mutate(region = region, year = model_year(timestep))
 }
 
-series <- bind_rows(lapply(geo_grid$region, region_series))
-t0 <- min(readRDS(quiet_fake(projection_job_files(run_dir))$file[1])$results$timestep)
+# Everything read from the runs, in one place: the regional series for A,
+# the per-row totals for B, and the day the arms part. Reading 640 rows for
+# nine regions takes some minutes, so it is kept and reused.
+cycle <- campaign_cycle(settings$future_campaign_days)
+cached <- if (!refresh && file.exists(cache_file)) readRDS(cache_file)
+if (is.null(cached) || !identical(cached$run_dirs, run_dirs) ||
+    !identical(cached$cycle, cycle)) {
+  message("Reading ", paste(basename(run_dirs), collapse = " + "), " ...")
+  cached <- list(
+    run_dirs = run_dirs,
+    cycle = cycle,
+    series = bind_rows(lapply(geo_grid$region, region_series)),
+    values = projection_row_values(run_dirs, cycle["from"], cycle["to"]),
+    t0 = min(readRDS(projection_job_files(run_dirs)$file[1])$results$timestep)
+  )
+  saveRDS(cached, cache_file)
+} else {
+  message("Reusing ", cache_file, " (add \"refresh\" to read the runs again).")
+}
+series <- cached$series
+values <- cached$values
+t0 <- cached$t0
 
 # Split each line into the stretch all arms share and the arms' own. The
 # arms' bands start in 2025: before then the four overlap almost exactly and
@@ -179,8 +204,6 @@ legend_panel <- function(keys, title, show_bands) {
 }
 
 # Panel B: national cases averted per 1,000 per year over the quoted cycle.
-cycle <- campaign_cycle(settings$future_campaign_days)
-values <- quiet_fake(projection_row_values(run_dir, cycle["from"], cycle["to"]))
 national <- national_values(values, region_populations(site), name = country)
 averted <- summarise_rows(arm_contrasts(national, comparator = "none"),
                           "cases_averted_per1000", digits = 0)
@@ -232,19 +255,12 @@ build_figure <- function(keys, legend_title, show_daily, show_bands) {
                                                     show_bands)),
                   wrap_elements(full = panel_b)),
              panels)
-  fig <- wrap_plots(plots, design = design, widths = c(0.12, rep(1, 5)),
-                    heights = c(rep(1, 4), 0.1))
-  if (is_fake) {
-    fig <- fig + plot_annotation(
-            caption = "NOTE: DUMMY DATA",
-      #caption = "FAKE DATA (every region is a scaled copy of the dummy Mopti run): for layout only",
-      theme = theme(plot.caption = element_text(size = 14, face = "bold")))
-  }
-  fig
+  wrap_plots(plots, design = design, widths = c(0.12, rep(1, 5)),
+             heights = c(rep(1, 4), 0.1))
 }
 
 save_figure <- function(fig, name) {
-  stem <- file.path(out_dir, paste0(if (is_fake) "FAKE_" else "", name))
+  stem <- file.path(out_dir, name)
   ggsave(paste0(stem, ".png"), fig, width = 13, height = 9, dpi = 300,
          device = ragg::agg_png, bg = "white")
   ggsave(paste0(stem, ".pdf"), fig, width = 13, height = 9,

@@ -9,23 +9,51 @@
 # file's mean for 2029 and 2030) before they are added up, so national
 # percentages are never averages of regional ones.
 #
-# Written to outputs/summaries/<run folder name>/:
+# Written to outputs/summaries/<first run folder's name>/:
 #   row_values.csv      totals and rates, one line per region, row and arm
 #   row_contrasts.csv   cases averted against no future nets, per row
 #   summary.csv         median [95% interval] across rows of both
 #
-# Reads the outputs only; it runs no simulations. Uses the dummy run unless
-# another run folder is named:
-#   Rscript analysis/09_summarise_projections.R outputs/projections/mli_hldrawn
+# Reads the outputs only; it runs no simulations. Name one run folder, or
+# several when a figure's arms are spread over more than one run: each arm
+# is taken from the first folder named that holds it, so a folder named
+# later only fills gaps. The exponential main run, split by row:
+#   Rscript analysis/09_summarise_projections.R \
+#     outputs/projections_v2/mli_hldrawn_v2_main \
+#     outputs/projections_v2/mli_hldrawn_v2_main_161_640
+# The smooth-compact run, which holds the ATN arms alone, with the
+# comparator arms from the exponential run (they do not depend on the
+# decay form):
+#   Rscript analysis/09_summarise_projections.R \
+#     outputs/projections_v2/mli_hldrawn_v2_scmain \
+#     outputs/projections_v2/mli_hldrawn_v2_main \
+#     outputs/projections_v2/mli_hldrawn_v2_main_161_640
 # Run with the working directory at the root of the package.
 
 devtools::load_all(quiet = TRUE)
 
 args <- commandArgs(trailingOnly = TRUE)
-run_dir <- if (length(args)) args[1] else "outputs/projections/mli_hldrawn_dummy"
-settings <- readRDS(file.path(run_dir, "settings.rds"))
-out_dir <- file.path("outputs", "summaries", basename(run_dir))
+if (!length(args)) stop("Name at least one run folder.", call. = FALSE)
+run_dirs <- args
+settings <- readRDS(file.path(run_dirs[1], "settings.rds"))
+out_dir <- file.path("outputs", "summaries", basename(run_dirs[1]))
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Every folder must quote the same cycle and must have been run to the end
+# of it: a test run that stopped early would otherwise be summarised over
+# whatever days it happens to hold.
+check_run <- function(dir, cycle) {
+  s <- readRDS(file.path(dir, "settings.rds"))
+  if (!identical(sort(s$future_campaign_days),
+                 sort(settings$future_campaign_days))) {
+    stop(basename(dir), " has different campaign days from ",
+         basename(run_dirs[1]), ".", call. = FALSE)
+  }
+  if (s$end_day < cycle["to"]) {
+    stop(basename(dir), " stops on day ", s$end_day, ", before the cycle ends ",
+         "on day ", cycle["to"], ".", call. = FALSE)
+  }
+}
 
 # The model counts 365-day years from 1 Jan 2000 (timestep 1).
 model_date <- function(t) {
@@ -35,8 +63,9 @@ model_date <- function(t) {
 }
 
 cycle <- campaign_cycle(settings$future_campaign_days)
+invisible(lapply(run_dirs, check_run, cycle = cycle))
 arms <- projection_arms()
-values <- projection_row_values(run_dir, cycle["from"], cycle["to"])
+values <- projection_row_values(run_dirs, cycle["from"], cycle["to"])
 values <- values[values$arm %in% arms$arm, ]
 
 site <- readRDS(file.path("data_private", "site_files",
@@ -68,7 +97,8 @@ write.csv(values, file.path(out_dir, "row_values.csv"), row.names = FALSE)
 write.csv(contrasts, file.path(out_dir, "row_contrasts.csv"), row.names = FALSE)
 write.csv(summary, file.path(out_dir, "summary.csv"), row.names = FALSE)
 
-cat(sprintf("%s: %d row(s); cycle = days %d-%d (%s to %s)\n", run_dir,
+cat(sprintf("%s: %d row(s); cycle = days %d-%d (%s to %s)\n",
+            paste(basename(run_dirs), collapse = " + "),
             length(unique(values$draw)), cycle["from"], cycle["to"],
             model_date(cycle["from"]), model_date(cycle["to"])))
 cat("Median [95% interval] across rows; cases averted are against no future nets.\n")

@@ -150,7 +150,10 @@ grid_range <- function(d) {
 
 grid_figure <- function(key, d = grid_data(key), ylim = NULL,
                         legend = TRUE, title = NULL, ylab = NULL,
-                        row_strips = TRUE, base = 12) {
+                        row_strips = TRUE, base = 12, yticks = TRUE) {
+  # Dropping the tick labels says the scale is somebody else's to read;
+  # that is only true when one has been handed in.
+  stopifnot(yticks || !is.null(ylim))
   points <- d$points; lines <- d$lines; ends <- d$ends
 
   ggplot(points, aes(arm, median, colour = arm)) +
@@ -205,6 +208,7 @@ grid_figure <- function(key, d = grid_data(key), ylim = NULL,
           strip.text.y = if (row_strips) element_text(size = base - 1)
                          else element_blank(),
           plot.title = element_text(size = base + 1),
+          axis.text.y = if (yticks) element_text() else element_blank(),
           legend.position = "bottom",
           axis.ticks.x = element_blank(),
           # The columns of a row carry one backdrop between them, so
@@ -252,7 +256,8 @@ combined <- patchwork::wrap_plots(
                 ylab = if (i == 1L)
                   "Clinical cases averted per 1,000 people per year vs comparator"
                 else FALSE,
-                row_strips = i == length(quantities), base = 10)
+                row_strips = i == length(quantities), base = 10,
+                yticks = i == 1L)
   }),
   nrow = 1, guides = "collect") +
   patchwork::plot_annotation(tag_levels = "A") &
@@ -260,7 +265,7 @@ combined <- patchwork::wrap_plots(
                  plot.tag = ggplot2::element_text(size = 20, face = "bold"),
                  # Room between the grids: with none, the next grid's y
                  # title runs into the last one's retention strips.
-                 plot.margin = ggplot2::margin(5, 22, 5, 22))
+                 plot.margin = ggplot2::margin(5, 4, 5, 4))
 # Four grids in a row, each about two thirds the width it has on its own.
 save_figure(combined, file.path(out_dir, sprintf("sweep_grid_all_%s", form)),
             20, 10.5)

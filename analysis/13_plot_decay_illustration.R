@@ -56,25 +56,31 @@ curves <- do.call(rbind, lapply(names(forms), function(f) {
   }))
 }))
 
+# One panel, the forms told apart by their line: the pair sharing a
+# half-life then sits together, which is the comparison worth making.
+# The rule at a half is dotted, so it is not taken for a form.
 ggsave(
   file.path(out_dir, "decay_forms.png"),
-  ggplot(curves, aes(age, potency, colour = half_life)) +
-    geom_hline(yintercept = 0.5, colour = "grey60", linetype = "dashed",
+  ggplot(curves, aes(age, potency, colour = half_life, linetype = form)) +
+    geom_hline(yintercept = 0.5, colour = "grey60", linetype = "dotted",
                linewidth = 0.4) +
     geom_line(linewidth = 0.9) +
-    facet_wrap(~ form) +
     scale_colour_viridis_d(end = 0.9, name = "Effective half-life") +
+    scale_linetype_manual(values = c("solid", "longdash"), name = NULL) +
     scale_x_continuous(breaks = 0:6) +
     scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.25)) +
-    labs(x = "Net age (years)", y = "Antimalarial effect remaining") +
+    labs(x = "Net age (years)", y = "Relative antimalarial effect") +
     theme_minimal(base_size = 13) +
     theme(panel.grid.minor = element_blank(),
-          legend.position = "bottom",
-          strip.text = element_text(size = 13)),
-  width = 9, height = 4.2, dpi = 300, device = ragg::agg_png, bg = "white")
+          legend.position = "bottom", legend.box = "vertical",
+          legend.spacing.y = unit(2, "pt"),
+          # Wide enough for a dash to show: in a short key both forms
+          # come out looking like the same solid line.
+          legend.key.width = unit(2.4, "lines")),
+  width = 7.5, height = 5, dpi = 300, device = ragg::agg_png, bg = "white")
 
 ggsave(file.path(out_dir, "decay_forms.pdf"), last_plot(),
-       width = 9, height = 4.2, device = grDevices::cairo_pdf)
+       width = 7.5, height = 5, device = grDevices::cairo_pdf)
 message("Saved: ", file.path(out_dir, "decay_forms.(png|pdf)"))
 
 # The half-life the projections draw from, from the package's own prior

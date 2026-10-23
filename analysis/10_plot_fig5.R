@@ -92,12 +92,13 @@ band_arms <- c("pyr_cfp", "atn", "pyr_atn", "pyr_cfp_atn")
 model_year <- function(t) 2000 + (t - 1) / 365
 half_window <- 182L
 
-# Panel A starts at the beginning of 2024: a year of the shared history is
-# enough to place the arms against, and the earlier years crowd the panels.
-x_from <- 2024
+# Panel A starts just before 2024: a year of the shared history is enough
+# to place the arms against, and the earlier years crowd the panels. The
+# few days before 2024 are there so the distribution on 1 January 2024 is
+# drawn as a line rather than along the edge of the panel.
+x_from <- 2023.95
 x_to <- 2032
-# The mass campaigns, late May of 2025, 2028 and 2031.
-campaign_years <- model_year(sort(settings$future_campaign_days))
+
 
 # Daily and rolling medians (and the rolling 95% interval) across rows for
 # one region, each arm's series being 2022-24 followed by the arm.
@@ -147,6 +148,15 @@ if (is.null(cached) || !identical(cached$run_dirs, run_dirs) ||
 series <- cached$series %>% filter(year >= x_from)
 values <- cached$values
 t0 <- cached$t0
+
+# Every mass distribution the panels show. The site file's own ITN
+# distributions are yearly, on 1 January (07), and the one in 2024 is the
+# last before the arms part: it is what they all start from. The future
+# campaigns are read from the run, the start of the month two months
+# before the month of peak rainfall, so 1 June of 2025, 2028 and 2031.
+hist_years <- seq(ceiling(x_from), floor(model_year(t0)))
+campaign_years <- c(model_year((hist_years - 2000L) * 365L + 1L),
+                    model_year(sort(settings$future_campaign_days)))
 
 # Everything before the arms part is drawn in grey, the rolling lines
 # included. A centred 365-day mean reaches the arms half a year early, so

@@ -151,11 +151,17 @@ grid_range <- function(d) {
 grid_figure <- function(key, d = grid_data(key), ylim = NULL,
                         legend = TRUE, title = NULL, ylab = NULL,
                         row_strips = TRUE, base = 12, yticks = TRUE,
-                        tag = NULL, border = FALSE, title_hjust = 0.5) {
+                        tag = NULL, border = FALSE, title_hjust = 0.5,
+                        comparators = TRUE) {
   # Dropping the tick labels says the scale is somebody else's to read;
   # that is only true when one has been handed in.
   stopifnot(yticks || !is.null(ylim))
   points <- d$points; lines <- d$lines; ends <- d$ends
+
+  # A version without the comparators shows the A(I)TN arms against the
+  # zero line alone: the comparison is in the title, and where an arm
+  # falls either side of nothing is the whole of it.
+  if (!comparators) ends <- ends[0, ]
 
   ggplot(points, aes(arm, median, colour = arm)) +
     # The comparators are a backdrop in three weights: their interval as
@@ -191,8 +197,10 @@ grid_figure <- function(key, d = grid_data(key), ylim = NULL,
                  hl_years = function(x) paste0("Half-life ", x, " y"),
                  retention_years = function(x) paste0("Retention ", x, " y"))) +
     scale_colour_manual(values = arm_colours,
-                        breaks = c(itn_arms, atn_arms),
-                        labels = arm_labels[c(itn_arms, atn_arms)],
+                        breaks = if (comparators) c(itn_arms, atn_arms)
+                                 else atn_arms,
+                        labels = arm_labels[if (comparators)
+                          c(itn_arms, atn_arms) else atn_arms],
                         name = NULL,
                         # Four grids in one figure want one legend. They
                         # are drawn from different data, so patchwork
@@ -277,72 +285,88 @@ if (needed[1] < shared[1] || needed[2] > shared[2]) {
   warning("The shared scale cuts off ", sprintf("%.0f to %.0f", needed[1],
           needed[2]), call. = FALSE)
 }
-grids <- lapply(seq_along(quantities), function(i) {
-  key <- names(quantities)[i]
-  # One y label, on A, naming the quantity without naming a comparison;
-  # each grid says which comparison it is in its title. The retention
-  # strips are on D alone: the rows line up across all four, so one set
-  # of labels does for them.
-  grid_figure(key, parts[[key]], ylim = shared, legend = i == 1L,
-              title = paste0("Comparator: ", against[[key]]),
-              ylab = if (i == 1L)
-                "Clinical cases averted per 1,000 people per year vs comparator"
-              else FALSE,
-              row_strips = i == length(quantities), base = 10,
-              yticks = i == 1L, tag = LETTERS[i], border = TRUE)
-})
+# The four grids of a combined figure. `ruled` is the first
+# arrangement, each grid inside its own rule with a large letter over
+# it; the second has the letter in the title instead.
+four <- function(ruled, comparators = TRUE) {
+  lapply(seq_along(quantities), function(i) {
+    key <- names(quantities)[i]
+    # One y label, on A, naming the quantity without naming a
+    # comparison; each grid says which comparison it is in its title.
+    # The retention strips are on D alone: the rows line up across all
+    # four, so one set of labels does for them.
+    grid_figure(
+      key, parts[[key]], ylim = shared, legend = i == 1L,
+      title = if (ruled) paste0("Comparator: ", against[[key]])
+              else bquote(bold(.(LETTERS[i])) ~~
+                            .(paste0("Comparator: ", against[[key]]))),
+      title_hjust = if (ruled) 0.5 else 0,
+      ylab = if (i == 1L)
+        "Clinical cases averted per 1,000 people per year vs comparator"
+      else FALSE,
+      row_strips = i == length(quantities), base = 10,
+      yticks = i == 1L, comparators = comparators,
+      tag = if (ruled) LETTERS[i], border = ruled)
+  })
+}
+
 # The legend gets a row of its own, below the grids, so that their rules
 # close under them instead of reaching down around it. The letters are
 # each grid's own, patchwork's tagging having nothing to tag the legend's
 # slot with.
-combined <- patchwork::wrap_plots(
-  c(grids, list(patchwork::guide_area())),
-  design = "ABCD\nEEEE", heights = c(1, 0.05), guides = "collect") &
-  # The letter is placed on the grid rather than beside it. Left where
-  # it defaults, it takes a column of its own at the grid's left edge
-  # and holds the panels off their rule by its own width.
-  ggplot2::theme(plot.tag = ggplot2::element_text(size = 20, face = "bold",
-                                                  hjust = 0, vjust = 1),
-                 plot.tag.position = c(0.004, 0.997),
-                 # The grids meet: with no y labels on B to D and no
-                 # retention strips on A to C there is nothing between
-                 # them to collide.
-                 plot.margin = ggplot2::margin(4, 0, 4, 0))
+ruled_figure <- function(grids) {
+  patchwork::wrap_plots(
+    c(grids, list(patchwork::guide_area())),
+    design = "ABCD\nEEEE", heights = c(1, 0.05), guides = "collect") &
+    # The letter is placed on the grid rather than beside it. Left where
+    # it defaults, it takes a column of its own at the grid's left edge
+    # and holds the panels off their rule by its own width.
+    ggplot2::theme(plot.tag = ggplot2::element_text(size = 20, face = "bold",
+                                                    hjust = 0, vjust = 1),
+                   plot.tag.position = c(0.004, 0.997),
+                   # The grids meet: with no y labels on B to D and no
+                   # retention strips on A to C there is nothing between
+                   # them to collide.
+                   plot.margin = ggplot2::margin(4, 0, 4, 0))
+}
 # Four grids in a row, each about two thirds the width it has on its own.
-save_figure(combined, file.path(out_dir, sprintf("sweep_grid_all_%s", form)),
-            14, 10.5)
+save_figure(ruled_figure(four(ruled = TRUE)),
+            file.path(out_dir, sprintf("sweep_grid_all_%s", form)), 14, 10.5)
 
 # A second arrangement of the same four, kept alongside the first. No
 # rule round a grid, so nothing encloses A's scale or D's strips; a line
 # between one grid and the next does the separating instead. The letter
 # joins its title rather than standing over the grid in large type, and
 # the title moves to the left to carry it.
-separated <- lapply(seq_along(quantities), function(i) {
-  key <- names(quantities)[i]
-  grid_figure(key, parts[[key]], ylim = shared, legend = i == 1L,
-              title = bquote(bold(.(LETTERS[i])) ~~
-                               .(paste0("Comparator: ", against[[key]]))),
-              title_hjust = 0,
-              ylab = if (i == 1L)
-                "Clinical cases averted per 1,000 people per year vs comparator"
-              else FALSE,
-              row_strips = i == length(quantities), base = 10,
-              yticks = i == 1L)
-})
+separated <- four(ruled = FALSE)
 rule <- function() {
   patchwork::wrap_elements(full = grid::linesGrob(
     x = grid::unit(c(0.5, 0.5), "npc"), y = grid::unit(c(0.02, 0.93), "npc"),
     gp = grid::gpar(col = "grey40", lwd = 1)))
 }
-save_figure(
+separated_figure <- function(grids) {
   patchwork::wrap_plots(
-    c(separated[1], list(rule()), separated[2], list(rule()), separated[3],
-      list(rule()), separated[4], list(patchwork::guide_area())),
+    c(grids[1], list(rule()), grids[2], list(rule()), grids[3],
+      list(rule()), grids[4], list(patchwork::guide_area())),
     # Patchwork fills a design's areas in alphabetical order, not left
     # to right, so the letters run in the order the plots are given:
     # grid, rule, grid, rule, grid, rule, grid, then the legend's row.
     design = "ABCDEFG\nHHHHHHH",
     widths = c(1, 0.012, 1, 0.012, 1, 0.012, 1),
     heights = c(1, 0.05), guides = "collect") &
-    ggplot2::theme(plot.margin = ggplot2::margin(4, 0, 4, 0)),
-  file.path(out_dir, sprintf("sweep_grid_all_sep_%s", form)), 14, 10.5)
+    ggplot2::theme(plot.margin = ggplot2::margin(4, 0, 4, 0))
+}
+save_figure(separated_figure(separated),
+            file.path(out_dir, sprintf("sweep_grid_all_sep_%s", form)),
+            14, 10.5)
+
+# And both arrangements again with no comparators at all: the A(I)TN
+# arms against the zero line, the comparison named in the title. On the
+# same scale as the rest, so a panel can be laid beside its fuller
+# version.
+save_figure(ruled_figure(four(ruled = TRUE, comparators = FALSE)),
+            file.path(out_dir, sprintf("sweep_grid_all_noitn_%s", form)),
+            14, 10.5)
+save_figure(separated_figure(four(ruled = FALSE, comparators = FALSE)),
+            file.path(out_dir, sprintf("sweep_grid_all_sep_noitn_%s", form)),
+            14, 10.5)

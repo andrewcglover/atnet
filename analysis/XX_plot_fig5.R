@@ -1,0 +1,261 @@
+# Fig. 5: projected PfPR2-10 in each region of Mali (A), and national
+# clinical cases averted by each net type over the quoted campaign cycle (B).
+#
+# A follows the June figure (analysis/legacy/c24med_projection_plots_select.R,
+# section 7): the regions laid out roughly as on the map, 2022-2031, with a
+# faint line for the daily median across draws-table rows and a bold line for
+# the median of each row's centred 365-day rolling mean. Until 2025 every arm
+# of a row shares one simulation, so that stretch is drawn once, in dark grey;
+# the bold lines part half a year before 2025, where the rolling window first
+# reaches the arms.
+# B gives clinical cases averted per 1,000 people per year against no future
+# nets, from the 2028 campaign to the day before the 2031 campaign, for the
+# country as a whole: each region's cases are scaled to its population before
+# they are added up, arms are compared within each row, and the dot and bar
+# are the median and 95% interval across rows (see
+# analysis/XX_summarise_projections.R).
+#
+# Two versions, written to outputs/figures/<run folder name>/:
+#   fig5_medians.(png|pdf)   medians for all seven arms (main text)
+#   fig5_bands.(png|pdf)     medians and 95% intervals for Pyr-CFP, ATN,
+#                            Pyr-ATN and Pyr-CFP-ATN (appendix); each band is
+#                            for one arm on its own, although the arms are
+#                            paired within rows
+# When the run is fake, the file names start with FAKE_ and the figure says
+# so.
+#
+# Needs every region of the site file. Reads the outputs only; it runs no
+# simulations. Uses the fake all-region run unless another run folder is
+# named:
+#   Rscript analysis/XX_plot_fig5.R outputs/projections/mli_hldrawn
+# Run with the working directory at the root of the package.
+
+devtools::load_all(quiet = TRUE)
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(dplyr)
+  library(patchwork)
+  library(sf)
+})
+
+args <- commandArgs(trailingOnly = TRUE)
+run_dir <- if (length(args)) args[1] else "outputs/fake/FAKE_mli_hldrawn_dummy"
+settings <- readRDS(file.path(run_dir, "settings.rds"))
+is_fake <- isTRUE(settings$fake)
+out_dir <- file.path("outputs", "figures", basename(run_dir))
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+if (is_fake) message("FAKE data: the figures are for layout only.")
+
+# The loader warns on every call for fake data; once (above) is enough.
+quiet_fake <- function(expr) {
+  withCallingHandlers(expr, warning = function(w) {
+    if (startsWith(conditionMessage(w), "Reading FAKE")) {
+      invokeRestart("muffleWarning")
+    }
+  })
+}
+
+site <- readRDS(file.path("data_private", "site_files",
+                          paste0(settings$country_iso, ".rds")))
+country <- unique(site$eir$country)
+
+# The June layout: regions placed roughly as on the map.
+geo_grid <- geofacet::grid_auto(site$shape$level_1, names = "name_1", seed = 1)
+names(geo_grid)[names(geo_grid) == "name_name_1"] <- "region"
+taken <- paste(geo_grid$row, geo_grid$col)
+corners <- c(paste(rep(1:2, 2), rep(1:2, each = 2)),   # legend
+             paste(rep(3:4, 2), rep(4:5, each = 2)))   # panel B
+if (any(corners %in% taken)) {
+  stop("The legend and panel B corners are not empty in this grid.",
+       call. = FALSE)
+}
+
+# Paul Tol's "vibrant" scheme, as in June, plus dark grey for 2022-24.
+arms <- projection_arms()
+arms$colour <- c("#BBBBBB", "#EE7733", "#CC3311", "#EE3377", "#009988",
+                 "#0077BB", "#33BBEE")
+key_colours <- c(setNames(arms$colour, arms$arm), shared = "#555555")
+key_labels <- c(setNames(arms$label, arms$arm), shared = "2022-24 (all arms)")
+band_arms <- c("pyr_cfp", "atn", "pyr_atn", "pyr_cfp_atn")
+
+model_year <- function(t) 2000 + (t - 1) / 365
+half_window <- 182L
+
+# Daily and rolling medians (and the rolling 95% interval) across rows for
+# one region, each arm's series being 2022-24 followed by the arm.
+region_series <- function(region) {
+  x <- quiet_fake(read_projection_jobs(run_dir, regions = region,
+                                       columns = "pfpr2to10"))
+  pre <- x[x$arm == "2022-2024", ]
+  x <- rbind(x[x$arm %in% arms$arm, ],
+             do.call(rbind, lapply(arms$arm, function(a) transform(pre, arm = a))))
+  x %>%
+    arrange(draw, arm, timestep) %>%
+    group_by(draw, arm) %>%
+    mutate(roll = zoo::rollmean(100 * pfpr2to10, 365L, fill = NA,
+                                align = "center")) %>%
+    group_by(arm, timestep) %>%
+    summarise(daily = median(100 * pfpr2to10),
+              roll_med = median(roll),
+              roll_lo = quantile(roll, 0.025, na.rm = TRUE, names = FALSE),
+              roll_hi = quantile(roll, 0.975, na.rm = TRUE, names = FALSE),
+              .groups = "drop") %>%
+    mutate(region = region, year = model_year(timestep))
+}
+
+series <- bind_rows(lapply(geo_grid$region, region_series))
+t0 <- min(readRDS(quiet_fake(projection_job_files(run_dir))$file[1])$results$timestep)
+
+# Split each line into the stretch all arms share and the arms' own. The
+# arms' bands start in 2025: before then the four overlap almost exactly and
+# stack into one dark band.
+split_shared <- function(s, value, shared_until, arms_from = shared_until) {
+  s$value <- s[[value]]
+  bind_rows(
+    s %>% filter(arm == "none", timestep <= shared_until) %>%
+      mutate(key = "shared"),
+    s %>% filter(timestep >= arms_from) %>% mutate(key = arm)
+  ) %>%
+    mutate(key = factor(key, levels = c("shared", arms$arm)))
+}
+daily <- split_shared(series, "daily", t0 - 1L)
+rolling <- split_shared(series, "roll_med", t0 - 1L - half_window)
+bands <- split_shared(series, "roll_med", t0 - 1L - half_window, t0) %>%
+  filter(!is.na(roll_lo))
+y_max <- 10 * ceiling(max(c(series$daily, series$roll_hi), na.rm = TRUE) / 10)
+
+region_panel <- function(region, keys, show_daily, show_bands) {
+  pos <- geo_grid[geo_grid$region == region, ]
+  show_x <- !any(geo_grid$row == pos$row + 1 & geo_grid$col == pos$col)
+  show_y <- !any(geo_grid$row == pos$row & geo_grid$col == pos$col - 1)
+  pick <- function(d) d[d$region == region & d$key %in% keys, ]
+  p <- ggplot(mapping = aes(year, value, colour = key, fill = key, group = key)) +
+    geom_vline(xintercept = model_year(t0), linetype = "dashed",
+               colour = "grey40", linewidth = 0.4)
+  if (show_bands) {
+    p <- p + geom_ribbon(data = pick(bands), aes(ymin = roll_lo, ymax = roll_hi),
+                         colour = NA, alpha = 0.2)
+  }
+  if (show_daily) {
+    p <- p + geom_line(data = pick(daily), linewidth = 0.4, alpha = 0.2)
+  }
+  p +
+    geom_line(data = pick(rolling), linewidth = 0.8, na.rm = TRUE) +
+    facet_wrap(~ region) +
+    scale_colour_manual(values = key_colours, guide = "none") +
+    scale_fill_manual(values = key_colours, guide = "none") +
+    scale_x_continuous(breaks = seq(2022, 2030, 2), limits = c(2022, 2032)) +
+    scale_y_continuous(breaks = seq(0, 100, 20), limits = c(0, y_max)) +
+    labs(x = NULL, y = NULL) +
+    theme_minimal(base_size = 13) +
+    theme(axis.text.x = if (show_x) element_text() else element_blank(),
+          axis.text.y = if (show_y) element_text() else element_blank(),
+          strip.text = element_text(size = 13))
+}
+
+# A plot holding only the legend (no data are drawn), which also carries
+# the "A" tag.
+legend_panel <- function(keys, title, show_bands) {
+  d <- data.frame(key = factor(keys, levels = keys), year = NA_real_,
+                  value = NA_real_)
+  p <- ggplot(d, aes(year, value, colour = key, fill = key))
+  if (show_bands) {
+    p <- p + geom_ribbon(aes(ymin = value, ymax = value), colour = NA,
+                         alpha = 0.2, na.rm = TRUE)
+  }
+  p +
+    geom_line(linewidth = 0.8, na.rm = TRUE) +
+    scale_colour_manual(values = key_colours, limits = keys,
+                        labels = key_labels[keys], name = title) +
+    scale_fill_manual(values = key_colours, limits = keys,
+                      labels = key_labels[keys], name = title) +
+    labs(tag = "A") +
+    theme_void(base_size = 13) +
+    theme(legend.position = "inside",
+          legend.position.inside = c(0.5, 0.5),
+          legend.key.width = unit(2, "lines"),
+          legend.text = element_text(size = 13),
+          plot.tag = element_text(size = 18, face = "bold"))
+}
+
+# Panel B: national cases averted per 1,000 per year over the quoted cycle.
+cycle <- campaign_cycle(settings$future_campaign_days)
+values <- quiet_fake(projection_row_values(run_dir, cycle["from"], cycle["to"]))
+national <- national_values(values, region_populations(site), name = country)
+averted <- summarise_rows(arm_contrasts(national, comparator = "none"),
+                          "cases_averted_per1000", digits = 0)
+averted$label <- factor(arms$label[match(averted$arm, arms$arm)],
+                        levels = rev(arms$label[-1]))
+model_month <- function(t) {
+  format(as.Date("2001-01-01") + (t - 1) %% 365, "%b")
+}
+cycle_text <- sprintf("%s, %s %d to %s %d", country,
+                      model_month(cycle["from"]), floor(model_year(cycle["from"])),
+                      model_month(cycle["to"]), floor(model_year(cycle["to"])))
+panel_b <- ggplot(averted, aes(median, label, colour = arm)) +
+  geom_vline(xintercept = 0, colour = "grey60", linewidth = 0.4) +
+  geom_linerange(aes(xmin = lower, xmax = upper), linewidth = 1) +
+  geom_point(size = 3) +
+  scale_colour_manual(values = key_colours, guide = "none") +
+  scale_x_continuous(limits = c(min(0, averted$lower), NA),
+                     expand = expansion(mult = c(0, 0.05))) +
+  labs(x = "Clinical cases averted per 1,000\npeople per year, vs no future nets",
+       y = NULL, title = cycle_text, tag = "B") +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid.major.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text.y = element_text(size = 13, colour = "black"),
+        plot.title = element_text(size = 13),
+        plot.title.position = "plot",
+        plot.tag = element_text(size = 18, face = "bold"))
+
+y_title <- wrap_elements(full = grid::textGrob(
+  expression(italic(Pf) * PR[2 - 10] * " (%)"), rot = 90,
+  gp = grid::gpar(fontsize = 15)))
+x_title <- wrap_elements(full = grid::textGrob("Year",
+                                               gp = grid::gpar(fontsize = 15)))
+
+build_figure <- function(keys, legend_title, show_daily, show_bands) {
+  design <- c(
+    area(1, 1, 4, 1),   # y title
+    area(5, 2, 5, 6),   # x title
+    area(1, 2, 2, 3),   # legend, tag A
+    area(3, 5, 4, 6),   # panel B
+    do.call(c, lapply(seq_len(nrow(geo_grid)), function(i) {
+      area(geo_grid$row[i], geo_grid$col[i] + 1)
+    }))
+  )
+  panels <- lapply(geo_grid$region, region_panel, keys = keys,
+                   show_daily = show_daily, show_bands = show_bands)
+  plots <- c(list(y_title, x_title,
+                  wrap_elements(full = legend_panel(keys, legend_title,
+                                                    show_bands)),
+                  wrap_elements(full = panel_b)),
+             panels)
+  fig <- wrap_plots(plots, design = design, widths = c(0.12, rep(1, 5)),
+                    heights = c(rep(1, 4), 0.1))
+  if (is_fake) {
+    fig <- fig + plot_annotation(
+            caption = "NOTE: DUMMY DATA",
+      #caption = "FAKE DATA (every region is a scaled copy of the dummy Mopti run): for layout only",
+      theme = theme(plot.caption = element_text(size = 14, face = "bold")))
+  }
+  fig
+}
+
+save_figure <- function(fig, name) {
+  stem <- file.path(out_dir, paste0(if (is_fake) "FAKE_" else "", name))
+  ggsave(paste0(stem, ".png"), fig, width = 13, height = 9, dpi = 300,
+         device = ragg::agg_png, bg = "white")
+  ggsave(paste0(stem, ".pdf"), fig, width = 13, height = 9,
+         device = grDevices::cairo_pdf)
+  message("Saved: ", stem, ".(png|pdf)")
+}
+
+save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
+                         show_bands = FALSE),
+            "fig5_medians")
+save_figure(build_figure(c(band_arms, "shared"),
+                         "Median and 95% uncertainty\ninterval across draws",
+                         show_daily = FALSE, show_bands = TRUE),
+            "fig5_bands")

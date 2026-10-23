@@ -351,7 +351,13 @@ region_panel <- function(region, keys, show_daily, show_bands, tag = NULL) {
 # the range the regions cover.
 national_panel <- function(keys, show_daily, show_bands) {
   display_arms <- setdiff(keys, "shared")
-  pick <- function(d) d[d$key %in% keys, ]
+  # Headed the way a region is, by a centred strip rather than a title,
+  # so the inset reads as one more panel of the same kind.
+  pick <- function(d) {
+    d <- d[d$key %in% keys, ]
+    d$panel <- "National"
+    d
+  }
   top <- 10 * ceiling(max(c(nat_series$daily, nat_series$roll_hi),
                           na.rm = TRUE) / 10)
   p <- ggplot(mapping = aes(year, value, colour = key, fill = key, group = grp)) +
@@ -374,13 +380,12 @@ national_panel <- function(keys, show_daily, show_bands) {
     scale_colour_manual(values = key_colours, guide = "none") +
     scale_fill_manual(values = key_colours, guide = "none") +
     scale_x_continuous(breaks = seq(2024, 2030, 2), limits = c(x_from, x_to)) +
+    facet_wrap(~ panel) +
     scale_y_continuous(breaks = seq(0, 100, 10), limits = c(0, top)) +
-    labs(x = NULL, y = expression(italic(Pf) * PR[2 - 10] * " (%)"),
-         title = country, tag = "A") +
+    labs(x = NULL, y = NULL, tag = "A") +
     theme_minimal(base_size = 13) +
     theme(panel.grid.minor = element_blank(),
-          plot.title = element_text(size = 13),
-          plot.title.position = "plot",
+          strip.text = element_text(size = 13),
           plot.tag = element_text(size = 18, face = "bold"),
           plot.background = element_rect(colour = "grey40", fill = NA,
                                          linewidth = 0.4),
@@ -452,8 +457,8 @@ panel_b <- ggplot(averted, aes(median, label, colour = arm)) +
 y_title <- wrap_elements(full = grid::textGrob(
   expression(italic(Pf) * PR[2 - 10] * " (%)"), rot = 90,
   gp = grid::gpar(fontsize = 15)))
-x_title <- wrap_elements(full = grid::textGrob("Year",
-                                               gp = grid::gpar(fontsize = 15)))
+# There is no x title: the years label themselves, and the caption says
+# what the panels are.
 
 # A plot laid into a share of the space it is given, so panel B sits a
 # little inside its corner of the figure rather than filling it.
@@ -481,13 +486,12 @@ build_figure <- function(keys, legend_title, show_daily, show_bands,
                  show_bands = show_bands,
                  tag = if (national && identical(rg, first_region)) "B")
   })
-  fixed <- list(y_title, x_title)
+  fixed <- list(y_title)
   if (national) {
     design <- c(area(1, 1, 4, 1),   # y title
-                area(5, 2, 5, 6),   # x title
                 area(1, 2, 2, 3),   # national inset, tag A
                 area(4, 2),         # legend
-                area(3, 5, 4, 6),   # panel B
+                area(3, 5, 4, 6),   # panel C
                 region_areas)
     plots <- c(fixed,
                list(wrap_elements(full = scaled(national_panel(
@@ -498,7 +502,6 @@ build_figure <- function(keys, legend_title, show_daily, show_bands,
                panels)
   } else {
     design <- c(area(1, 1, 4, 1),   # y title
-                area(5, 2, 5, 6),   # x title
                 area(1, 2, 2, 3),   # legend, tag A
                 area(3, 5, 4, 6),   # panel B
                 region_areas)
@@ -509,7 +512,7 @@ build_figure <- function(keys, legend_title, show_daily, show_bands,
                panels)
   }
   wrap_plots(plots, design = design, widths = c(0.12, rep(1, 5)),
-             heights = c(rep(1, 4), 0.1))
+             heights = rep(1, 4))
 }
 
 # The antimalarial's decay form goes in the file name: the two forms give

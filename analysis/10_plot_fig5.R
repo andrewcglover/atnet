@@ -13,7 +13,7 @@
 # country as a whole: each region's cases are scaled to its population before
 # they are added up, arms are compared within each row, and the dot and bar
 # are the median and 95% interval across rows (see
-# analysis/XX_summarise_projections.R).
+# analysis/09_summarise_projections.R).
 #
 # Two versions, written to outputs/figures/<run folder name>/:
 #   fig5_medians.(png|pdf)   medians for all seven arms (main text)
@@ -27,7 +27,7 @@
 # Needs every region of the site file. Reads the outputs only; it runs no
 # simulations. Uses the fake all-region run unless another run folder is
 # named:
-#   Rscript analysis/XX_plot_fig5.R outputs/projections/mli_hldrawn
+#   Rscript analysis/10_plot_fig5.R outputs/projections/mli_hldrawn
 # Run with the working directory at the root of the package.
 
 devtools::load_all(quiet = TRUE)

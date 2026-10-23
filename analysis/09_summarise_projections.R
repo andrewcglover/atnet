@@ -16,7 +16,7 @@
 #
 # Reads the outputs only; it runs no simulations. Uses the dummy run unless
 # another run folder is named:
-#   Rscript analysis/XX_summarise_projections.R outputs/projections/mli_hldrawn
+#   Rscript analysis/09_summarise_projections.R outputs/projections/mli_hldrawn
 # Run with the working directory at the root of the package.
 
 devtools::load_all(quiet = TRUE)

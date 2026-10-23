@@ -3,10 +3,10 @@
 #
 # Four figures, one per comparison, each a grid of 20 panels -- net
 # retention across, half-life down. In every panel the three A(I)TN arms
-# are a point and a 95% uncertainty interval, and the three ITNs are
-# horizontal lines: dashed at their median, dotted at the ends of their
-# interval. The ITNs carry no antimalarial, so their lines do not change
-# down a column; they change across one, retention being theirs too.
+# are a point and a 95% uncertainty interval, and the three ITNs are a
+# dashed line at their median over a faint band holding their interval.
+# The ITNs carry no antimalarial, so their backdrop does not change down
+# a column; it changes across one, retention being theirs too.
 #
 #   sweep_grid_vs_nonets_<form>   averted against no future nets
 #   sweep_grid_vs_pyr_<form>      additional, against Pyr
@@ -138,11 +138,14 @@ grid_figure <- function(key) {
   }
 
   ggplot(points, aes(arm, median, colour = arm)) +
+    # The comparators' intervals are a backdrop, so they are shaded
+    # rather than ruled: three pairs of dotted lines crowded the panels
+    # and read as content. They are drawn first and faintly, the three
+    # of them overlapping over much of the range.
+    geom_rect(data = ends, inherit.aes = FALSE,
+              aes(xmin = -Inf, xmax = Inf, ymin = lower, ymax = upper,
+                  fill = arm), alpha = 0.10) +
     geom_hline(yintercept = 0, colour = "grey75", linewidth = 0.3) +
-    geom_hline(data = ends, aes(yintercept = lower, colour = arm),
-               linetype = "dotted", linewidth = 0.4) +
-    geom_hline(data = ends, aes(yintercept = upper, colour = arm),
-               linetype = "dotted", linewidth = 0.4) +
     geom_hline(data = lines, aes(yintercept = median, colour = arm),
                linetype = "dashed", linewidth = 0.5) +
     geom_linerange(aes(ymin = lower, ymax = upper), linewidth = 0.9) +
@@ -155,6 +158,7 @@ grid_figure <- function(key) {
                         breaks = c(itn_arms, atn_arms),
                         labels = arm_labels[c(itn_arms, atn_arms)],
                         name = NULL) +
+    scale_fill_manual(values = arm_colours, guide = "none") +
     scale_x_discrete(labels = NULL, breaks = NULL) +
     labs(x = NULL,
          y = sprintf("Clinical cases averted per 1,000 people per year, vs %s",

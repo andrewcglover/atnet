@@ -2,7 +2,7 @@
 # clinical cases averted by each net type over the quoted campaign cycle (B).
 #
 # A follows the June figure (analysis/legacy/c24med_projection_plots_select.R,
-# section 7): the regions laid out roughly as on the map, 2022-2031, with a
+# section 7): the regions laid out roughly as on the map, 2024-2031, with a
 # faint line for the daily median across draws-table rows and a bold line for
 # the median of each row's centred 365-day rolling mean. Until 2025 every arm
 # of a row shares one simulation, so that stretch is drawn once, in dark grey;
@@ -86,11 +86,18 @@ arms <- projection_arms()
 arms$colour <- c("#BBBBBB", "#EE7733", "#CC3311", "#EE3377", "#009988",
                  "#0077BB", "#33BBEE")
 key_colours <- c(setNames(arms$colour, arms$arm), shared = "#555555")
-key_labels <- c(setNames(arms$label, arms$arm), shared = "2022-24 (all arms)")
+key_labels <- c(setNames(arms$label, arms$arm), shared = "Before the switch (all arms)")
 band_arms <- c("pyr_cfp", "atn", "pyr_atn", "pyr_cfp_atn")
 
 model_year <- function(t) 2000 + (t - 1) / 365
 half_window <- 182L
+
+# Panel A starts at the beginning of 2024: a year of the shared history is
+# enough to place the arms against, and the earlier years crowd the panels.
+x_from <- 2024
+x_to <- 2032
+# The mass campaigns, late May of 2025, 2028 and 2031.
+campaign_years <- model_year(sort(settings$future_campaign_days))
 
 # Daily and rolling medians (and the rolling 95% interval) across rows for
 # one region, each arm's series being 2022-24 followed by the arm.
@@ -133,7 +140,11 @@ if (is.null(cached) || !identical(cached$run_dirs, run_dirs) ||
 } else {
   message("Reusing ", cache_file, " (add \"refresh\" to read the runs again).")
 }
-series <- cached$series
+# The cache holds every day read; panel A shows from x_from on. Dropping
+# the rest here rather than at the scale keeps the rolling means intact
+# (they were worked out over the whole series) and saves ggplot discarding
+# the same rows, with a warning, once per panel.
+series <- cached$series %>% filter(year >= x_from)
 values <- cached$values
 t0 <- cached$t0
 
@@ -187,6 +198,7 @@ line_data <- function(d, display_arms, shared_one) {
             else shared %>% filter(arm %in% display_arms)
   bind_rows(shared, d %>% filter(key != "shared", arm %in% display_arms))
 }
+# The y scale is shared by every panel, and set by what is on show.
 y_max <- 10 * ceiling(max(c(series$daily, series$roll_hi), na.rm = TRUE) / 10)
 
 region_panel <- function(region, keys, show_daily, show_bands) {
@@ -198,6 +210,8 @@ region_panel <- function(region, keys, show_daily, show_bands) {
   display_arms <- setdiff(keys, "shared")
   pick <- function(d) d[d$region == region & d$key %in% keys, ]
   p <- ggplot(mapping = aes(year, value, colour = key, fill = key, group = grp)) +
+    geom_vline(xintercept = campaign_years, linetype = "dotted",
+               colour = "grey45", linewidth = 0.4) +
     geom_vline(xintercept = model_year(t0), linetype = "dashed",
                colour = "grey40", linewidth = 0.4)
   if (show_bands) {
@@ -215,7 +229,7 @@ region_panel <- function(region, keys, show_daily, show_bands) {
     facet_wrap(~ region) +
     scale_colour_manual(values = key_colours, guide = "none") +
     scale_fill_manual(values = key_colours, guide = "none") +
-    scale_x_continuous(breaks = seq(2022, 2030, 2), limits = c(2022, 2032)) +
+    scale_x_continuous(breaks = seq(2024, 2030, 2), limits = c(x_from, x_to)) +
     scale_y_continuous(breaks = seq(0, 100, 20), limits = c(0, y_max)) +
     labs(x = NULL, y = NULL) +
     theme_minimal(base_size = 13) +

@@ -150,7 +150,8 @@ grid_range <- function(d) {
 
 grid_figure <- function(key, d = grid_data(key), ylim = NULL,
                         legend = TRUE, title = NULL, ylab = NULL,
-                        row_strips = TRUE, base = 12, yticks = TRUE) {
+                        row_strips = TRUE, base = 12, yticks = TRUE,
+                        tag = NULL) {
   # Dropping the tick labels says the scale is somebody else's to read;
   # that is only true when one has been handed in.
   stopifnot(yticks || !is.null(ylim))
@@ -192,7 +193,8 @@ grid_figure <- function(key, d = grid_data(key), ylim = NULL,
                         # are drawn from different data, so patchwork
                         # does not take them for copies of each other
                         # and would lay all four side by side.
-                        guide = if (legend) "legend" else "none") +
+                        guide = if (legend) guide_legend(nrow = 1)
+                                else "none") +
     scale_fill_manual(values = arm_colours, guide = "none") +
     scale_x_discrete(labels = NULL, breaks = NULL) +
     # Labelled every 200 with a line every 100 between. The sequence
@@ -200,7 +202,7 @@ grid_figure <- function(key, d = grid_data(key), ylim = NULL,
     scale_y_continuous(breaks = seq(-2000, 2000, 200),
                        minor_breaks = seq(-2000, 2000, 100)) +
     coord_cartesian(ylim = ylim) +
-    labs(x = NULL, title = title,
+    labs(x = NULL, title = title, tag = tag,
          y = if (is.null(ylab))
            sprintf("Clinical cases averted per 1,000 people per year vs %s",
                    against[[key]])
@@ -212,7 +214,12 @@ grid_figure <- function(key, d = grid_data(key), ylim = NULL,
           strip.text.y = if (row_strips) element_text(size = base - 1)
                          else element_blank(),
           plot.title = element_text(size = base + 1, hjust = 0.5),
+          # A grid with no scale of its own gives up the room for one,
+          # so its panels start at its rule.
           axis.text.y = if (yticks) element_text() else element_blank(),
+          axis.title.y = if (isFALSE(ylab)) element_blank()
+                         else element_text(angle = 90),
+          axis.ticks.length.y = if (yticks) unit(2.75, "pt") else unit(0, "pt"),
           legend.position = "bottom",
           axis.ticks.x = element_blank(),
           # The columns of a row carry one backdrop between them, so
@@ -254,25 +261,28 @@ if (needed[1] < shared[1] || needed[2] > shared[2]) {
   warning("The shared scale cuts off ", sprintf("%.0f to %.0f", needed[1],
           needed[2]), call. = FALSE)
 }
+grids <- lapply(seq_along(quantities), function(i) {
+  key <- names(quantities)[i]
+  # One y label, on A, naming the quantity without naming a comparison;
+  # each grid says which comparison it is in its title. The retention
+  # strips are on D alone: the rows line up across all four, so one set
+  # of labels does for them.
+  grid_figure(key, parts[[key]], ylim = shared, legend = i == 1L,
+              title = paste0("Comparator: ", against[[key]]),
+              ylab = if (i == 1L)
+                "Clinical cases averted per 1,000 people per year vs comparator"
+              else FALSE,
+              row_strips = i == length(quantities), base = 10,
+              yticks = i == 1L, tag = LETTERS[i])
+})
+# The legend gets a row of its own, below the grids, so that their rules
+# close under them instead of reaching down around it. The letters are
+# each grid's own, patchwork's tagging having nothing to tag the legend's
+# slot with.
 combined <- patchwork::wrap_plots(
-  lapply(seq_along(quantities), function(i) {
-    key <- names(quantities)[i]
-    # One y label, on A, naming the quantity without naming a
-    # comparison; each grid says which comparison it is in its title.
-    # The retention strips are on D alone: the rows line up across all
-    # four, so one set of labels does for them.
-    grid_figure(key, parts[[key]], ylim = shared, legend = i == 1L,
-                title = paste0("Comparator: ", against[[key]]),
-                ylab = if (i == 1L)
-                  "Clinical cases averted per 1,000 people per year vs comparator"
-                else FALSE,
-                row_strips = i == length(quantities), base = 10,
-                yticks = i == 1L)
-  }),
-  nrow = 1, guides = "collect") +
-  patchwork::plot_annotation(tag_levels = "A") &
-  ggplot2::theme(legend.position = "bottom",
-                 plot.tag = ggplot2::element_text(size = 20, face = "bold"),
+  c(grids, list(patchwork::guide_area())),
+  design = "ABCD\nEEEE", heights = c(1, 0.05), guides = "collect") &
+  ggplot2::theme(plot.tag = ggplot2::element_text(size = 20, face = "bold"),
                  # The grids meet, each inside its own rule: nothing
                  # between them to collide, B to D having no y labels
                  # and A to C no retention strips.
@@ -281,4 +291,4 @@ combined <- patchwork::wrap_plots(
                    colour = "grey40", fill = NA, linewidth = 0.4))
 # Four grids in a row, each about two thirds the width it has on its own.
 save_figure(combined, file.path(out_dir, sprintf("sweep_grid_all_%s", form)),
-            20, 10.5)
+            14, 10.5)

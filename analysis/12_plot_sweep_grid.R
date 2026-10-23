@@ -31,6 +31,7 @@
 
 devtools::load_all(quiet = TRUE)
 suppressPackageStartupMessages({
+  library(patchwork)
   library(ggplot2)
   library(dplyr)
 })
@@ -89,7 +90,9 @@ band <- function(d, column, by) {
               .groups = "drop")
 }
 
-grid_figure <- function(key) {
+# What one comparison's grid is drawn from. Separated from the drawing
+# so that the four can be worked out first and share a y scale.
+grid_data <- function(key) {
   column <- quantities[[key]]
 
   # A contrast is missing only when the seven-arm run at that retention
@@ -136,6 +139,18 @@ grid_figure <- function(key) {
     message("  ", missing, " panel(s) have no comparator yet: the ",
             "seven-arm run at that retention is not summarised")
   }
+  list(points = points, lines = lines, ends = ends)
+}
+
+# Everything a grid draws, for setting a scale the four can share.
+grid_range <- function(d) {
+  range(c(d$points$lower, d$points$upper, d$lines$lower, d$lines$upper),
+        na.rm = TRUE)
+}
+
+grid_figure <- function(key, d = grid_data(key), ylim = NULL,
+                        legend = TRUE) {
+  points <- d$points; lines <- d$lines; ends <- d$ends
 
   ggplot(points, aes(arm, median, colour = arm)) +
     # The comparators are a backdrop in three weights: their interval as
@@ -146,7 +161,7 @@ grid_figure <- function(key) {
     # reads as a background colour rather than as an interval.
     geom_rect(data = ends, inherit.aes = FALSE,
               aes(xmin = -Inf, xmax = Inf, ymin = lower, ymax = upper,
-                  fill = arm), alpha = 0.06) +
+                  fill = arm), alpha = 0.10) +
     geom_hline(yintercept = 0, colour = "grey75", linewidth = 0.3) +
     geom_hline(data = ends, aes(yintercept = lower, colour = arm),
                linetype = "dashed", linewidth = 0.4, alpha = 0.35) +
@@ -166,9 +181,15 @@ grid_figure <- function(key) {
     scale_colour_manual(values = arm_colours,
                         breaks = c(itn_arms, atn_arms),
                         labels = arm_labels[c(itn_arms, atn_arms)],
-                        name = NULL) +
+                        name = NULL,
+                        # Four grids in one figure want one legend. They
+                        # are drawn from different data, so patchwork
+                        # does not take them for copies of each other
+                        # and would lay all four side by side.
+                        guide = if (legend) "legend" else "none") +
     scale_fill_manual(values = arm_colours, guide = "none") +
     scale_x_discrete(labels = NULL, breaks = NULL) +
+    coord_cartesian(ylim = ylim) +
     labs(x = NULL,
          y = sprintf("Clinical cases averted per 1,000 people per year, vs %s",
                      against[[key]])) +
@@ -180,13 +201,42 @@ grid_figure <- function(key) {
           axis.ticks.x = element_blank())
 }
 
-for (key in names(quantities)) {
-  message("Drawing ", key)
-  fig <- grid_figure(key)
-  stem <- file.path(out_dir, sprintf("sweep_grid_%s_%s", key, form))
-  ggsave(paste0(stem, ".png"), fig, width = 11, height = 12, dpi = 300,
-         device = ragg::agg_png, bg = "white")
-  ggsave(paste0(stem, ".pdf"), fig, width = 11, height = 12,
-         device = grDevices::cairo_pdf)
+save_figure <- function(fig, stem, width, height) {
+  ggsave(paste0(stem, ".png"), fig, width = width, height = height, dpi = 300,
+         device = ragg::agg_png, bg = "white", limitsize = FALSE)
+  ggsave(paste0(stem, ".pdf"), fig, width = width, height = height,
+         device = grDevices::cairo_pdf, limitsize = FALSE)
   message("Saved: ", stem, ".(png|pdf)")
 }
+
+parts <- lapply(names(quantities), function(key) {
+  message("Reading ", key)
+  grid_data(key)
+})
+names(parts) <- names(quantities)
+
+# One figure per comparison, each on the scale its own numbers need.
+for (key in names(quantities)) {
+  save_figure(grid_figure(key, parts[[key]]),
+              file.path(out_dir, sprintf("sweep_grid_%s_%s", key, form)),
+              11, 12)
+}
+
+# And the four together, A to D, on one scale so that the size of a
+# difference can be carried from one comparison to the next. The scale
+# has to hold everything from the deepest the weakest arm falls below
+# Pyr-CFP to the most the strongest averts against no nets, so each
+# grid uses less of its height than it does on its own.
+shared <- range(vapply(parts, grid_range, numeric(2)))
+message(sprintf("Shared y scale: %.0f to %.0f", shared[1], shared[2]))
+combined <- patchwork::wrap_plots(
+  lapply(seq_along(quantities), function(i) {
+    key <- names(quantities)[i]
+    grid_figure(key, parts[[key]], ylim = shared, legend = i == 1L)
+  }),
+  ncol = 2, guides = "collect") +
+  patchwork::plot_annotation(tag_levels = "A") &
+  ggplot2::theme(legend.position = "bottom",
+                 plot.tag = ggplot2::element_text(size = 20, face = "bold"))
+save_figure(combined, file.path(out_dir, sprintf("sweep_grid_all_%s", form)),
+            20, 22)

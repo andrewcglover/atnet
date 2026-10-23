@@ -141,11 +141,12 @@ grid_figure <- function(key) {
     # The comparators are a backdrop in three weights: their interval as
     # a tint, its ends as faint dashed rules, and the median as a solid
     # line held back from full strength, so the A(I)TN points stay the
-    # darkest thing in the panel. The tints are wide and overlap, so
-    # much of a panel carries one.
+    # darkest thing in the panel. The tints are faint: they are wide,
+    # overlapping, and cover much of a panel, so anything stronger
+    # reads as a background colour rather than as an interval.
     geom_rect(data = ends, inherit.aes = FALSE,
               aes(xmin = -Inf, xmax = Inf, ymin = lower, ymax = upper,
-                  fill = arm), alpha = 0.15) +
+                  fill = arm), alpha = 0.06) +
     geom_hline(yintercept = 0, colour = "grey75", linewidth = 0.3) +
     geom_hline(data = ends, aes(yintercept = lower, colour = arm),
                linetype = "dashed", linewidth = 0.4, alpha = 0.35) +

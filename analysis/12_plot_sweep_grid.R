@@ -282,7 +282,12 @@ grids <- lapply(seq_along(quantities), function(i) {
 combined <- patchwork::wrap_plots(
   c(grids, list(patchwork::guide_area())),
   design = "ABCD\nEEEE", heights = c(1, 0.05), guides = "collect") &
-  ggplot2::theme(plot.tag = ggplot2::element_text(size = 20, face = "bold"),
+  # The letter is placed on the grid rather than beside it. Left where
+  # it defaults, it takes a column of its own at the grid's left edge
+  # and holds the panels off their rule by its own width.
+  ggplot2::theme(plot.tag = ggplot2::element_text(size = 20, face = "bold",
+                                                  hjust = 0, vjust = 1),
+                 plot.tag.position = c(0.004, 0.997),
                  # The grids meet, each inside its own rule: nothing
                  # between them to collide, B to D having no y labels
                  # and A to C no retention strips.

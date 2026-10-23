@@ -1,13 +1,17 @@
 # Two illustrative figures, for explaining the antimalarial's decay:
 #
-#   decay_forms.(png|pdf)    the potency P(a) left on a net of age a,
-#                            under each decay form, at four half-lives
+#   decay_forms.(png|pdf)    the antimalarial effect P(a) left on a net
+#                            of age a, under each decay form, at four
+#                            effective half-lives
 #   half_life_prior.(png|pdf) the half-life the projections draw from
 #
-# Potency is the share of the antimalarial's effect that is left: every
+# P(a) is the share of the antimalarial's effect that is left: every
 # one of its three mechanisms is multiplied by it, so P = 1 is a net
 # giving its full effect and P = 0 one giving none. It is not an
-# efficacy against malaria.
+# efficacy against malaria. What is drawn is the half-life of that
+# effect -- the "effective antimalarial half-life" -- and not the
+# half-life of the chemical on the net. The fork calls P potency, so
+# the function below keeps that name; the figures do not.
 #
 # The two forms are the fork's `atn_potency()` (R/biting_process.R),
 # repeated here so the figure can be drawn without the fork loaded, and
@@ -59,10 +63,10 @@ ggsave(
                linewidth = 0.4) +
     geom_line(linewidth = 0.9) +
     facet_wrap(~ form) +
-    scale_colour_viridis_d(end = 0.9, name = "Half-life") +
+    scale_colour_viridis_d(end = 0.9, name = "Effective half-life") +
     scale_x_continuous(breaks = 0:6) +
     scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.25)) +
-    labs(x = "Net age (years)", y = "Potency") +
+    labs(x = "Net age (years)", y = "Antimalarial effect remaining") +
     theme_minimal(base_size = 13) +
     theme(panel.grid.minor = element_blank(),
           legend.position = "bottom",
@@ -77,7 +81,7 @@ message("Saved: ", file.path(out_dir, "decay_forms.(png|pdf)"))
 # so the figure cannot drift from the runs.
 hl <- projection_priors()$half_life_atn_years
 q <- stats::qlnorm(c(0.025, 0.5, 0.975), hl$meanlog, hl$sdlog)
-message(sprintf("Half-life: median %.2f y, 95%% %.2f to %.2f y", q[2], q[1], q[3]))
+message(sprintf("Effective antimalarial half-life: median %.2f y, 95%% %.2f to %.2f y", q[2], q[1], q[3]))
 
 x <- seq(1, 8, by = 0.005)
 dens <- data.frame(x = x, d = stats::dlnorm(x, hl$meanlog, hl$sdlog))
@@ -91,7 +95,7 @@ ggsave(
     geom_vline(xintercept = q[2], colour = "#0077BB", linetype = "dashed",
                linewidth = 0.5) +
     scale_x_continuous(breaks = 1:8) +
-    labs(x = "Half-life of the antimalarial's effect (years)", y = NULL) +
+    labs(x = "Effective antimalarial half-life (years)", y = NULL) +
     theme_minimal(base_size = 13) +
     theme(panel.grid.minor = element_blank(),
           axis.text.y = element_blank(),

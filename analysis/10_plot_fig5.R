@@ -358,7 +358,13 @@ national_panel <- function(keys, show_daily, show_bands) {
     d$panel <- "National"
     d
   }
-  top <- 10 * ceiling(max(c(nat_series$daily, nat_series$roll_hi),
+  # Its own scale, set by what the inset actually draws: the daily lines
+  # reach well above the bands, so an inset showing bands alone does not
+  # want the room they need.
+  shown <- nat_series[nat_series$arm %in% display_arms, ]
+  top <- 10 * ceiling(max(c(shown$roll_med,
+                            if (show_daily) shown$daily,
+                            if (show_bands) shown$roll_hi),
                           na.rm = TRUE) / 10)
   p <- ggplot(mapping = aes(year, value, colour = key, fill = key, group = grp)) +
     geom_vline(xintercept = campaign_years, linetype = "dotted",
@@ -471,8 +477,11 @@ scaled <- function(p, s = 0.9) {
 # B sits in the bottom right. In the first the legend has the top left
 # corner; in the second the national series takes that corner and the
 # legend drops to the empty cell south of Kayes and west of Sikasso.
+# `nat_bands` lets the national inset show its bands while the regions
+# show their medians: the country has room for them where nine small
+# panels do not.
 build_figure <- function(keys, legend_title, show_daily, show_bands,
-                         national = FALSE) {
+                         national = FALSE, nat_bands = show_bands) {
   region_areas <- do.call(c, lapply(seq_len(nrow(geo_grid)), function(i) {
     area(geo_grid$row[i], geo_grid$col[i] + 1)
   }))
@@ -495,7 +504,8 @@ build_figure <- function(keys, legend_title, show_daily, show_bands,
                 region_areas)
     plots <- c(fixed,
                list(wrap_elements(full = scaled(national_panel(
-                      keys, show_daily, show_bands))),
+                      keys, show_daily = show_daily && !nat_bands,
+                      show_bands = nat_bands))),
                     wrap_elements(full = legend_panel(keys, legend_title,
                                                       show_bands, tag = NULL)),
                     wrap_elements(full = scaled(panel_b + labs(tag = "C")))),
@@ -545,3 +555,11 @@ save_figure(build_figure(c(band_arms, "shared"), NULL,
                          show_daily = FALSE, show_bands = TRUE,
                          national = TRUE),
             "fig5_national_bands")
+# The medians figure, but with the national inset banded: all seven arms
+# throughout, the regions by their medians and the country with its 95%
+# intervals as well. The legend is the medians one, so what the shading
+# is belongs in the caption.
+save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
+                         show_bands = FALSE, national = TRUE,
+                         nat_bands = TRUE),
+            "fig5_national_medians_bandinset")

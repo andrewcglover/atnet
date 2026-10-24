@@ -23,10 +23,11 @@ stopifnot(is.finite(retention_days), retention_days > 0)
 # distribution table fitted under the other form.
 retention_form <- Sys.getenv("RETENTION_FORM", "exp")
 stopifnot(retention_form %in% c("exp", "smoothcompact"))
-# Only the smooth-compact branch needs atnet (for sc_retention_params), and the
-# working directory is the package root, so load it from there rather than
-# depending on an installed copy.
-if (retention_form == "smoothcompact" && !requireNamespace("atnet", quietly = TRUE)) {
+# The fit itself is atnet's (net_usage / usage_to_distribution, and
+# sc_retention_params on the smooth-compact branch), and the working directory
+# is the package root, so load it from there rather than depending on an
+# installed copy.
+if (!requireNamespace("atnet", quietly = TRUE)) {
   pkgload::load_all(".", quiet = TRUE)
 }
 start_year <- 2000L        # as in 07: day t is day t of 365-day years from 1 January 2000
@@ -41,24 +42,35 @@ iv   <- site$interventions
 # logistic retention and the fork's antimalarial decay -- same (half_life, k),
 # same l = half_life / sqrt(1 - k/(k - log 0.5)) -- so the two packages cannot
 # disagree about the curve. atnet solves for the pair that has the wanted mean.
-loss_args <- function(retention, form) {
+retained_fn <- function(retention, form) {
   if (form == "smoothcompact") {
     sc <- atnet::sc_retention_params(retention)
-    list(net_loss_function = netz::net_loss_map, half_life = sc$half_life, k = sc$k)
+    function(a) netz::net_loss_map(a, sc$half_life, sc$k)
   } else {
-    list(net_loss_function = netz::net_loss_exp, mean_retention = retention)
+    function(a) netz::net_loss_exp(a, retention)
   }
 }
 
+# The curve is netz's, but the fit is not. netz::model_distribution_to_usage()
+# carries the standing stock forward by S(time since the PREVIOUS round), which
+# ages every net still in use as though it had just been handed out. That is
+# exact only for a memoryless curve, which is to say the exponential. Under
+# smooth-compact, nearly flat at age zero, it re-ages the stock each year and so
+# never lets a net die: it reported the target use from a little over half the
+# nets that actually deliver it (0.395 use against a 0.565 target, confirmed
+# against a Monte Carlo of the model). atnet::usage_to_distribution() does
+# malariasimulation's own bookkeeping instead -- a person uses a net while the
+# net from their most recent receipt is alive -- which is right for any curve
+# and agrees with netz to rounding for the exponential, so the exponential fit
+# is unchanged. See R/net_usage.R.
 fit_region <- function(x, retention, form = retention_form) {
   x  <- x[order(x$year), ]
   ut <- (x$year - start_year) * 365L + use_day
   dt <- (x$year - start_year) * 365L + x$itn_distribution_day
-  la <- loss_args(retention, form)
-  d  <- do.call(netz::usage_to_model_distribution, c(list(
-    usage = x$itn_use, usage_timesteps = ut, distribution_timesteps = dt,
-    distribution_lower = rep(0, nrow(x)), distribution_upper = rep(1, nrow(x))), la))
-  u  <- do.call(netz::model_distribution_to_usage, c(list(ut, d, dt), la))
+  S  <- retained_fn(retention, form)
+  d  <- atnet::usage_to_distribution(x$itn_use, ut, dt, S,
+                                     lower = rep(0, nrow(x)), upper = rep(1, nrow(x)))
+  u  <- atnet::net_usage(ut, d, dt, S)
   data.frame(year = x$year, timestep = dt, target_use = x$itn_use, coverage = d, fitted_use = u,
              site_file_coverage = x$itn_input_dist)
 }

@@ -39,6 +39,8 @@ rows <- lapply(fs, function(f) {
     deltaq          = x$deltaq,
     spor_len        = x$spor_len,
     retention_days  = x$retention_days,
+    # Calibrations made before the two net-loss forms existed are exponential.
+    retention_form  = if (is.null(x$retention_form)) "exp" else x$retention_form,
     populations     = paste(x$populations, collapse = ";"),
     attempts        = sum(grepl("^Attempt", lg)),
     ended           = ended,
@@ -59,7 +61,7 @@ if (any(tab$ended != "Success")) {
 }
 same <- function(col) length(unique(tab[[col]])) == 1L
 for (col in c("fit_first_year", "fit_last_year", "deltaq", "spor_len", "retention_days",
-              "cali_version", "fork_version", "site_version")) {
+              "retention_form", "cali_version", "fork_version", "site_version")) {
   if (!same(col)) stop("The regions disagree on ", col, ": ", toString(unique(tab[[col]])),
                        call. = FALSE)
 }

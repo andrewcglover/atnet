@@ -170,7 +170,12 @@ sim_identity <- list(
   fork_sha  = fork_sha,
   packages  = vapply(c("malariasimulation", "individual", "dqrng", "malariaEquilibrium", "site"),
                      pkg_id, character(1)),
-  r_version = R.version$version.string
+  r_version = R.version$version.string,
+  # The net-loss form shapes the whole history, and a mean-matched
+  # smooth-compact run quotes the same retention in days as its exponential
+  # counterpart. Without this a saved history would pass the reuse check and be
+  # restored into the wrong world; the file name carries it too.
+  retention_form = Sys.getenv("RETENTION_FORM", "exp")
 )
 # hipercow's id for the installation of the cluster's library (none locally).
 conan_id <- local({
@@ -357,9 +362,33 @@ n_future_years <- 7L      # 2025-2031: campaigns in 2025, 2028 and 2031
 # Columns kept from 2022 on (regular expressions; daily values). The history files
 # keep every column. M_exposed_<species> is the species' ATN-exposed adults
 # (S, E and I) and total_M_<species> all its adults; see annotate().
-keep_columns <- c("^timestep$", "^n_detect_lm_", "^n_age_", "^n_inc_clinical_",
-                  "^n_inc_severe_", "^EIR_", "^total_M_", "^M_exposed_", "^n_use_net$",
-                  "^n_use_atn$", "^(region|arm|draw|seed|year_rel|pfpr2to10|clin_inc)$")
+#
+# n_detect_lm_ is the sampled count (a Bernoulli draw per asymptomatic person);
+# p_detect_lm_ is the same quantity with that draw replaced by its probability,
+# so it has the same mean and less noise. Both are kept: the sampled one is the
+# headline numerator, the other is there if a single realisation's daily series
+# ever needs to be read.
+#
+# Sv/Ev/Iv_(un)exposed_<species>_count are the adult compartments split by
+# antimalarial exposure (unexposed = class q = 0) and by infection state. Keeping
+# all six per species gives every breakdown by summing: a species' exposed share,
+# its S/E/I split, its total (which must equal total_M_<species>), and the same
+# across species. "Exposed" here means ATN-exposed, NOT latently infected -- the
+# latently infected are Ev, exposed or not.
+# mu_<species> is the realised adult death rate, not the site file's constant
+# mum: it is rebuilt each timestep from W, Z and f, so it carries the nets' kill
+# and repellency as they decay. The antimalarial does not enter it (dn0_atn is 0
+# in every arm), so differences between arms are pyrethroid, chlorfenapyr and
+# repellency alone.
+# n_inc_ covers all three incidence families: n_inc_<band> (every new infection),
+# n_inc_clinical_ and n_inc_severe_. The difference between the first and the
+# second is the infections that never become clinical. Note p_inc_<band> is
+# rendered as a column of zeros -- nothing fills it -- so match n_ only.
+keep_columns <- c("^timestep$", "^n_detect_lm_", "^p_detect_lm_",
+                  "^n_detect_pcr_", "^n_age_", "^n_inc_", "^EIR_", "^mu_",
+                  "^total_M_", "^M_exposed_", "^(Sv|Ev|Iv)_(un)?exposed_",
+                  "^n_use_net$", "^n_use_atn$",
+                  "^(region|arm|draw|seed|year_rel|pfpr2to10|clin_inc)$")
 # Mass campaigns are this many calendar months before the month of peak rainfall,
 # at the start of the month (so 60-90 days before the peak); see section 5.
 campaign_months_before_peak <- 2L
@@ -383,6 +412,20 @@ retention_years <- 1.8
 # NET_RETENTION_DAYS: override the retention (days). Empty = retention_years.
 ret_env            <- Sys.getenv("NET_RETENTION_DAYS", "")
 retention_override <- if (nzchar(ret_env)) as.numeric(ret_env) else NULL
+# RETENTION_FORM: how a net is lost, "exp" (the default, and everything run
+# before 2026-10-24) or "smoothcompact". The mean is the same under either --
+# retention is estimated as a mean, so that is what is matched, exactly as the
+# antimalarial's two decay forms share a half-life because the half-life is
+# what was elicited. Unlike FUTURE_RETENTION_DAYS this is NOT a from-2025
+# override: the form holds from 2000, so a smooth-compact run needs its own
+# histories and its own calibration and never describes a world whose nets
+# changed how they are lost partway through. Both appear in the history file
+# name and in sim_identity so neither can be read as the other.
+retention_form <- Sys.getenv("RETENTION_FORM", "exp")
+if (!retention_form %in% c("exp", "smoothcompact")) {
+  stop("RETENTION_FORM must be 'exp' or 'smoothcompact', not '", retention_form,
+       "'.", call. = FALSE)
+}
 # Compartment counts. Both are structural: they set the adult-mosquito array sizes
 # at model construction, so a saved state only restores into a model of the same
 # sizes (hence both appear in each history's file name, below).
@@ -554,6 +597,16 @@ if (!identical(calibrated_eir_file, "none")) {
            call. = FALSE)
     }
   }
+  # Retention days alone do not identify the calibration: the two net-loss
+  # forms are matched on the mean, so both quote the same number. Files
+  # written before the forms existed carry no column and are exponential.
+  ce_form <- if ("retention_form" %in% names(ce)) one("retention_form") else "exp"
+  if (!identical(ce_form, retention_form)) {
+    stop(calibrated_eir_file, " was fitted with retention_form = ", ce_form,
+         " but this run has ", retention_form, ". Calibrate this configuration ",
+         "(07a, then 07b) with RETENTION_FORM set, or set CALIBRATED_EIR_FILE=none ",
+         "to use the site file's EIRs.", call. = FALSE)
+  }
   hit <- match(iconv(site_obj$eir$name_1, to = "ASCII//TRANSLIT"), ce$region)
   if (anyNA(hit)) {
     stop(calibrated_eir_file, " has no EIR for ",
@@ -592,6 +645,16 @@ if (!identical(itn_dist_file, "none")) {
   if (!isTRUE(all.equal(unique(itn_dist$retention_days), retention_time))) {
     stop(itn_dist_file, " was fitted for a retention of ", toString(unique(itn_dist$retention_days)),
          " days, but this run uses ", retention_time, ". Rerun 06b with NET_RETENTION_DAYS.", call. = FALSE)
+  }
+  # 06b turns observed coverage into a number of nets handed out, which depends
+  # on how fast nets are then lost -- so the fit belongs to one net-loss form,
+  # not just to one mean. Files written before the forms existed are exponential.
+  id_form <- if ("retention_form" %in% names(itn_dist))
+    unique(itn_dist$retention_form) else "exp"
+  if (!identical(id_form, retention_form)) {
+    stop(itn_dist_file, " was fitted with retention_form = ", toString(id_form),
+         " but this run uses ", retention_form,
+         ". Rerun 06b with RETENTION_FORM set.", call. = FALSE)
   }
   if (!identical(unique(itn_dist$site_file_md5), site_file_md5)) {
     stop(itn_dist_file, " was fitted to a different site file. Rerun 06b.", call. = FALSE)
@@ -1088,6 +1151,27 @@ build_params <- function(region, arm, draw, stage = c("projection", "pre")) {
                       atn_overrides, list(ode_max_steps = 1e8, a_tol = 0.1))
   )
 
+  # site_parameters() ends by calling its own set_age_outputs(), which fixes two
+  # prevalence bands of its own: 1-99 y and 2-10 y. Replace them here, after that
+  # call, with the three we report on. The bands overlap, so they cannot be given
+  # as breaks through set_epi_outputs() (which makes contiguous bands); site sets
+  # the vectors directly for the same reason. Bounds are inclusive days, and the
+  # upper one is a day short of the next birthday, as site's own are.
+  #   0-36499   all ages (0 to 99 y)
+  #   183-1824  6-59 months, the band household surveys measure
+  #   730-3649  2-10 y, which pfpr2to10 and the EIR calibration both read
+  # The age-group renderer takes the union of every band in use, so n_age_ follows
+  # these without being set. Clinical and severe incidence keep site's three bands.
+  p$prevalence_rendering_min_ages <- c(0,     183,  730)
+  p$prevalence_rendering_max_ages <- c(36499, 1824, 3649)
+
+  # Every new infection, on the bands site already uses for clinical and severe
+  # incidence, so that n_inc_ minus n_inc_clinical_ is the infections that never
+  # become clinical. Counting only -- no extra random draws, so runs stay
+  # comparable with those made before this was turned on.
+  p$incidence_rendering_min_ages <- p$clinical_incidence_rendering_min_ages
+  p$incidence_rendering_max_ages <- p$clinical_incidence_rendering_max_ages
+
   past <- build_past_schedule(ms$interventions, region, inp)
 
   ts  <- c(past$timesteps,  fsch$timesteps)
@@ -1102,19 +1186,45 @@ build_params <- function(region, arm, draw, stage = c("projection", "pre")) {
   rn <- rn[ord]; rnm <- rnm[ord]; gam <- gam[ord]
 
   n_sp <- length(p$species)
-  p <- set_bednets(p,
+  net_args <- list(p,
     timesteps = ts,
     coverages = cov,
-    retention = retention_use,
     dn0       = matrix(rep(dn0, n_sp), ncol = n_sp),
     rn        = matrix(rep(rn,  n_sp), ncol = n_sp),
     rnm       = matrix(rep(rnm, n_sp), ncol = n_sp),
     gamman    = gam
   )
-  # site_parameters() has already called set_bednets() with the site file's own
-  # retention, and the fork sets the ATN coverage loss rate from the first such
-  # call only, so set it here from the retention the nets now use.
-  p$lambda_atn <- 1 / retention_use
+  if (retention_form == "smoothcompact") {
+    # The same mean retention as the exponential form, under the curve the
+    # antimalarial's decay already uses, with everything gone by 20 years.
+    # set_bednets() rebuilds that zero day from the pair, so both go in.
+    sc <- atnet::sc_retention_params(retention_use)
+    net_args$logistic_half_life <- rep(sc$half_life, length(ts))
+    net_args$logistic_k         <- rep(sc$k,         length(ts))
+  } else {
+    net_args$retention <- retention_use
+  }
+  p <- do.call(set_bednets, net_args)
+
+  if (retention_form == "smoothcompact") {
+    # site_parameters() called set_bednets() with the site file's retention, so
+    # bednet_retention is already set and the call above did not clear it: its
+    # checks look at its own arguments, not at the parameter list. Both
+    # distribute_nets() and the fork's ATN coverage pick their form on whether
+    # bednet_retention is set, so leaving it would silently keep BOTH of them
+    # exponential with nothing to show for it. Drop it and check.
+    p$bednet_retention <- NULL
+    p$lambda_atn       <- NULL   # unused once coverage follows the net curve
+    stopifnot(is.null(p$bednet_retention),
+              !is.null(p$bednet_logistic_half_life),
+              !is.null(p$bednet_logistic_k),
+              length(p$bednet_logistic_half_life) == length(p$bednet_timesteps))
+  } else {
+    # site_parameters() has already called set_bednets() with the site file's own
+    # retention, and the fork sets the ATN coverage loss rate from the first such
+    # call only, so set it here from the retention the nets now use.
+    p$lambda_atn <- 1 / retention_use
+  }
 
   p
 }
@@ -1152,9 +1262,14 @@ trim_columns <- function(d) d[grepl(paste(keep_columns, collapse = "|"), names(d
 # sizes: a history saved at other counts cannot be restored into this model, and
 # without them in the name a run at new counts would silently pick up the old file.
 history_file <- function(region) {
-  file.path(HISTORY_DIR, sprintf("%s_%s_pop%d_ret%d_dq%d_sl%d.rds",
+  # "ret" is the exponential form and "retsc" the smooth-compact one. They are
+  # matched on the mean, so both quote the same number of days and would
+  # otherwise share a file name.
+  file.path(HISTORY_DIR, sprintf("%s_%s_pop%d_%s%d_dq%d_sl%d.rds",
                                  tolower(COUNTRY_ISO), region_tag(region),
-                                 human_pop, round(retention_time),
+                                 human_pop,
+                                 if (retention_form == "smoothcompact") "retsc" else "ret",
+                                 round(retention_time),
                                  deltaq_use, spor_len_use))
 }
 
@@ -1307,6 +1422,7 @@ run_settings <- list(
   itn_draws_source = itn_draws_source()[c("repo", "commit", "md5")],
   human_pop        = human_pop,
   retention_time   = retention_time,
+  retention_form   = retention_form,     # "exp" or "smoothcompact", from 2000
   future_retention = future_retention,   # NULL = retention_time from 2025 as well
   campaign_cov     = campaign_cov,
   cd_floor_frac    = cd_floor_frac,
@@ -1394,7 +1510,7 @@ parallel::clusterExport(cl, c(
   "n_steps", "n_future_years", "draws_tab", "itn_draws", "net_of_arm",
   "net_of_site_type", "p_a_of_arm", "hl_fixed_years", "SEED_BASE",
   "cd_cov", "campaign_cov", "cd_interval", "retention_time", "future_retention",
-  "deltaq_use", "spor_len_use",
+  "retention_form", "deltaq_use", "spor_len_use",
   "omega_quantile", "omega_fixed", "p_a_quantile", "p_a_fixed", "atn_mechanism",
   "population_overrides", "form_overrides", "human_pop", "future_interventions",
   "COUNTRY_ISO", "HISTORY_DIR", "JOB_DIR", "FAILED_DIR", "END_DAY", "keep_columns",

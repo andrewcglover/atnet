@@ -98,6 +98,30 @@ job_groups <- function(jobs) {
   split(jobs$file, factor(key, levels = unique(key)))
 }
 
+# malariasimulation renders EIR_<species> lagged by the human latent period:
+# the value stamped at day t is the infectious biting rate of day t - de. The
+# lag is how the model delays infection, so it belongs in the simulation, but
+# it makes the rendered series 12 days late against every other column. Undone
+# here rather than in the fork, so it applies to runs already made.
+EIR_RENDER_LAG <- 12L   # malariasimulation's `de`, its default and ours
+
+# Move each EIR column back onto the day it was delivered. Series are grouped
+# by region, arm and row, which is also how the file stores them -- the shared
+# 2022-2024 segment is one series and each arm another -- so the last `lag`
+# days of each become NA. Those are 9113-9124 and 11669-11680, outside any
+# reporting window; period_counts() stops if a window reaches them.
+unlag_eir <- function(x, lag = EIR_RENDER_LAG) {
+  cols <- grep("^EIR_", names(x), value = TRUE)
+  if (!length(cols) || lag <= 0L || !nrow(x)) return(x)
+  j <- integer(nrow(x))
+  for (g in split(seq_len(nrow(x)), paste(x$region, x$arm, x$draw))) {
+    i <- g[order(x$timestep[g])]
+    j[i] <- c(i[-seq_len(lag)], rep(NA_integer_, min(lag, length(i))))
+  }
+  x[cols] <- x[j, cols, drop = FALSE]
+  x
+}
+
 # One region and row, read from the folders that hold it. Each arm is taken
 # from the first folder named that has it, so a folder later in the list
 # only fills gaps: naming the smooth-compact run before the exponential one
@@ -114,7 +138,10 @@ read_one_job <- function(files, pre = TRUE) {
     taken <- c(taken, unique(x$arm))
     parts[[length(parts) + 1L]] <- x
   }
-  do.call(rbind, parts)
+  # Folders combined here need not agree on their columns: a run made after the
+  # reporting age bands changed renders different ones. Bind what they share.
+  keep <- Reduce(intersect, lapply(parts, names))
+  unlag_eir(do.call(rbind, lapply(parts, function(p) p[keep])))
 }
 
 #' Read daily projection results
@@ -209,6 +236,14 @@ period_counts <- function(x, from, to) {
   if (!nrow(x)) stop("No days between ", from, " and ", to, call. = FALSE)
   sum_cols <- function(cols) rowSums(x[, cols, drop = FALSE])
   eir_cols <- setdiff(grep("^EIR_", names(x), value = TRUE), "EIR_total_pp")
+  # unlag_eir() leaves the last days of each series without an EIR; a window
+  # reaching them would total a column that is part NA.
+  if (length(eir_cols) && anyNA(x[eir_cols])) {
+    stop("EIR is missing for some days between ", from, " and ", to,
+         ": the window runs into the last ", EIR_RENDER_LAG,
+         " days of a series, which the lag correction leaves empty.",
+         call. = FALSE)
+  }
   daily <- data.frame(
     region = x$region, draw = x$draw, arm = x$arm,
     days = 1,

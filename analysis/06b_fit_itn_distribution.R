@@ -18,32 +18,54 @@
 SITE_FILE <- file.path("data_private", "site_files", "MLI.rds")
 retention_days <- as.numeric(Sys.getenv("NET_RETENTION_DAYS", "657"))
 stopifnot(is.finite(retention_days), retention_days > 0)
+# RETENTION_FORM: "exp" (the default) or "smoothcompact", as in 07. The mean is
+# the same under either; the shape of the loss is not, and 07 refuses a
+# distribution table fitted under the other form.
+retention_form <- Sys.getenv("RETENTION_FORM", "exp")
+stopifnot(retention_form %in% c("exp", "smoothcompact"))
 start_year <- 2000L        # as in 07: day t is day t of 365-day years from 1 January 2000
 use_day    <- 183L         # the site file's fit reads each year's use at mid-year
 
 site <- readRDS(SITE_FILE)
 iv   <- site$interventions
 
-fit_region <- function(x, retention) {
+# How many nets a coverage implies depends on how fast they are then lost, so
+# this fit belongs to one net-loss form as much as to one mean. netz's
+# net_loss_map() is the same smooth-compact curve as malariasimulation's
+# logistic retention and the fork's antimalarial decay -- same (half_life, k),
+# same l = half_life / sqrt(1 - k/(k - log 0.5)) -- so the two packages cannot
+# disagree about the curve. atnet solves for the pair that has the wanted mean.
+loss_args <- function(retention, form) {
+  if (form == "smoothcompact") {
+    sc <- atnet::sc_retention_params(retention)
+    list(net_loss_function = netz::net_loss_map, half_life = sc$half_life, k = sc$k)
+  } else {
+    list(net_loss_function = netz::net_loss_exp, mean_retention = retention)
+  }
+}
+
+fit_region <- function(x, retention, form = retention_form) {
   x  <- x[order(x$year), ]
   ut <- (x$year - start_year) * 365L + use_day
   dt <- (x$year - start_year) * 365L + x$itn_distribution_day
-  d  <- netz::usage_to_model_distribution(
+  la <- loss_args(retention, form)
+  d  <- do.call(netz::usage_to_model_distribution, c(list(
     usage = x$itn_use, usage_timesteps = ut, distribution_timesteps = dt,
-    distribution_lower = rep(0, nrow(x)), distribution_upper = rep(1, nrow(x)),
-    net_loss_function = netz::net_loss_exp, mean_retention = retention)
-  u  <- netz::model_distribution_to_usage(ut, d, dt, net_loss_function = netz::net_loss_exp,
-                                          mean_retention = retention)
+    distribution_lower = rep(0, nrow(x)), distribution_upper = rep(1, nrow(x))), la))
+  u  <- do.call(netz::model_distribution_to_usage, c(list(ut, d, dt), la))
   data.frame(year = x$year, timestep = dt, target_use = x$itn_use, coverage = d, fitted_use = u,
              site_file_coverage = x$itn_input_dist)
 }
 
 out <- do.call(rbind, lapply(unique(iv$name_1), function(r) {
   x <- iv[iv$name_1 == r, ]
-  # The check: at the site file's own retention, netz must give back its distributions.
+  # The check: at the site file's own retention, netz must give back its
+  # distributions. The site file's own numbers were derived under exponential
+  # loss, so this check stays exponential whatever form is being fitted --
+  # it tests that netz is being driven correctly, not which curve we want.
   site_ret <- unique(x$mean_retention)
   stopifnot(length(site_ret) == 1L)
-  back <- fit_region(x, site_ret)
+  back <- fit_region(x, site_ret, form = "exp")
   err  <- max(abs(back$coverage - back$site_file_coverage))
   if (err > 1e-3) stop(r, ": netz does not reproduce the site file's distributions (max error ", err, ")")
   cbind(region = iconv(r, to = "ASCII//TRANSLIT"), fit_region(x, retention_days),
@@ -51,6 +73,7 @@ out <- do.call(rbind, lapply(unique(iv$name_1), function(r) {
 }))
 out$capped         <- out$coverage > 1 - 1e-9
 out$retention_days <- retention_days
+out$retention_form <- retention_form
 out$netz_version   <- as.character(utils::packageVersion("netz"))
 out$site_file_md5  <- unname(tools::md5sum(SITE_FILE))
 

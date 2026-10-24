@@ -159,6 +159,7 @@ saveRDS(list(region = region, eir = eir, site_file_eir = site_eir, target = targ
              window = c(fit_first_year, fit_last_year), populations = pops,
              minutes = minutes, validation = validation, seed = SEED_BASE,
              deltaq = deltaq_use, spor_len = spor_len_use, retention_days = retention_time,
+             retention_form = retention_form,
              fork_version = fork_version, sim_identity = sim_identity,
              cali = as.character(utils::packageVersion("cali")), code_md5 = code_md5),
         file.path(out_dir, sprintf("%s.rds", region_tag(region))))

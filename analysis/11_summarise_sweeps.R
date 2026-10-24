@@ -63,6 +63,11 @@ design_of <- function(s, run) {
     hl_years = as.numeric(one(s$hl_fixed_years)),
     # The arms keep the baseline retention unless the run changes it.
     retention_days = as.numeric(one(s$future_retention, one(s$retention_time))),
+    # How a net is lost, as against how the antimalarial decays. Runs made
+    # before the two forms existed are exponential. Comparators are paired on
+    # retention_days alone, which identifies a run only within one form, so a
+    # table built from runs of both forms must be split on this first.
+    retention_form = one(s$retention_form, "exp"),
     mechanism = one(s$atn_mechanism, "both"),
     omega_q = as.numeric(one(s$omega_quantile)),
     p_a_q = as.numeric(one(s$p_a_quantile)),
@@ -161,5 +166,5 @@ say("%d lines from %d run(s) -> %s", nrow(all), length(files),
 
 cat("\nDesign points held:\n")
 pts <- unique(all[c("run", "decay_form", "hl_years", "retention_days",
-                    "mechanism", "omega_q", "p_a_q")])
+                    "retention_form", "mechanism", "omega_q", "p_a_q")])
 print(pts[order(pts$decay_form, pts$run), ], row.names = FALSE)

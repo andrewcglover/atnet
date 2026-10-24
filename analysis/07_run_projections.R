@@ -568,8 +568,12 @@ if (!is.null(future_retention)) {
 # compartment counts or net retention are not this run's: a different configuration needs its
 # own calibration. CALIBRATED_EIR_FILE names another table; "none" keeps the site file's EIRs,
 # which is what 07a uses, since it is finding new ones.
+# One table per net-loss form, written by 07b; the exponential keeps the
+# original name so nothing that referred to it has to change.
 calibrated_eir_file <- Sys.getenv("CALIBRATED_EIR_FILE",
-                                  file.path(CODE_PATH, "inst", "extdata", "calibrated_eir.csv"))
+                                  file.path(CODE_PATH, "inst", "extdata",
+                                            if (retention_form == "smoothcompact")
+                                              "calibrated_eir_scret.csv" else "calibrated_eir.csv"))
 calibrated_eir_md5  <- NA_character_
 if (!identical(calibrated_eir_file, "none")) {
   if (!file.exists(calibrated_eir_file)) {

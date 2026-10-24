@@ -76,9 +76,15 @@ if (file.exists(site_file)) {
   }
 }
 
-out <- file.path("inst", "extdata", "calibrated_eir.csv")
+# One table per net-loss form. The two are matched on the mean retention, so
+# they would otherwise overwrite each other here and 07 would read whichever
+# was written last; the exponential keeps the original name, so every earlier
+# run and every reference to it still resolves.
+out <- file.path("inst", "extdata",
+                 if (identical(tab$retention_form[1], "smoothcompact"))
+                   "calibrated_eir_scret.csv" else "calibrated_eir.csv")
 write.csv(tab, out, row.names = FALSE)
-message(sprintf("Wrote %d regions to %s (deltaq %d, spor_len %d, retention %g d, fitted %d-%d)",
+message(sprintf("Wrote %d regions to %s (deltaq %d, spor_len %d, retention %g d %s, fitted %d-%d)",
                 nrow(tab), out, tab$deltaq[1], tab$spor_len[1], tab$retention_days[1],
-                tab$fit_first_year[1], tab$fit_last_year[1]))
+                tab$retention_form[1], tab$fit_first_year[1], tab$fit_last_year[1]))
 print(tab[, c("region", "site_file_eir", "calibrated_eir", "attempts", "ended")], row.names = FALSE)

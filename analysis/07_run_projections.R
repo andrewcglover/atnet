@@ -1202,9 +1202,13 @@ build_params <- function(region, arm, draw, stage = c("projection", "pre")) {
     # The same mean retention as the exponential form, under the curve the
     # antimalarial's decay already uses, with everything gone by 20 years.
     # set_bednets() rebuilds that zero day from the pair, so both go in.
+    # Scalars, as bednet_retention is under the exponential form: distribute_nets()
+    # hands the whole vector to logistic_net_retention_time(), which treats it as
+    # one value, so a per-timestep vector would be recycled across people in
+    # arbitrary order rather than read row by row.
     sc <- atnet::sc_retention_params(retention_use)
-    net_args$logistic_half_life <- rep(sc$half_life, length(ts))
-    net_args$logistic_k         <- rep(sc$k,         length(ts))
+    net_args$logistic_half_life <- sc$half_life
+    net_args$logistic_k         <- sc$k
   } else {
     net_args$retention <- retention_use
   }
@@ -1220,9 +1224,8 @@ build_params <- function(region, arm, draw, stage = c("projection", "pre")) {
     p$bednet_retention <- NULL
     p$lambda_atn       <- NULL   # unused once coverage follows the net curve
     stopifnot(is.null(p$bednet_retention),
-              !is.null(p$bednet_logistic_half_life),
-              !is.null(p$bednet_logistic_k),
-              length(p$bednet_logistic_half_life) == length(p$bednet_timesteps))
+              identical(p$bednet_logistic_half_life, sc$half_life),
+              identical(p$bednet_logistic_k, sc$k))
   } else {
     # site_parameters() has already called set_bednets() with the site file's own
     # retention, and the fork sets the ATN coverage loss rate from the first such

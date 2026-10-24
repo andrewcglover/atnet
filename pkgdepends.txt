@@ -8,10 +8,13 @@
 # imports are listed here instead, so it finds them already installed.
 repo::https://mrc-ide.r-universe.dev
 
-# The ATN fork of malariasimulation, pinned by tag. v0.3-atn (2026-10-20) adds
-# atn_decay_form, the smooth-compact option for the antimalarial's effect decay;
-# its default reproduces v0.2-atn exactly, so the exponential runs are unaffected.
-andrewcglover/malariasimulation@v0.3-atn
+# The ATN fork of malariasimulation, pinned by tag. v0.4-atn (2026-10-24) makes
+# the ATN coverage follow whichever net-loss form set_bednets was given, so that
+# Q_atn_t and the IBM's own net-loss times describe one process; it reproduces
+# v0.3-atn bit for bit on the exponential path (checked over a 400-day ATN run),
+# so the exponential runs are unaffected. v0.3-atn (2026-10-20) added
+# atn_decay_form, the smooth-compact option for the antimalarial's effect decay.
+andrewcglover/malariasimulation@v0.4-atn
 
 # Used by analysis/07_run_projections.R.
 dplyr

@@ -23,6 +23,12 @@ stopifnot(is.finite(retention_days), retention_days > 0)
 # distribution table fitted under the other form.
 retention_form <- Sys.getenv("RETENTION_FORM", "exp")
 stopifnot(retention_form %in% c("exp", "smoothcompact"))
+# Only the smooth-compact branch needs atnet (for sc_retention_params), and the
+# working directory is the package root, so load it from there rather than
+# depending on an installed copy.
+if (retention_form == "smoothcompact" && !requireNamespace("atnet", quietly = TRUE)) {
+  pkgload::load_all(".", quiet = TRUE)
+}
 start_year <- 2000L        # as in 07: day t is day t of 365-day years from 1 January 2000
 use_day    <- 183L         # the site file's fit reads each year's use at mid-year
 
@@ -79,7 +85,12 @@ out$site_file_md5  <- unname(tools::md5sum(SITE_FILE))
 
 dir <- file.path("data_private", "itn_distribution")
 dir.create(dir, recursive = TRUE, showWarnings = FALSE)
-f <- file.path(dir, sprintf("itn_input_dist_ret%d.csv", round(retention_days)))
+# "ret" is the exponential form and "retsc" the smooth-compact one: they are
+# matched on the mean, so both quote the same number of days and would
+# otherwise share a file name. 07 looks for exactly this name.
+f <- file.path(dir, sprintf("itn_input_dist_%s%d.csv",
+                            if (retention_form == "smoothcompact") "retsc" else "ret",
+                            round(retention_days)))
 write.csv(out, f, row.names = FALSE)
 
 message(sprintf("Wrote %s: %d regions x %d years; site file reproduced to within %.1e",

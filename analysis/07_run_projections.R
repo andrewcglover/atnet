@@ -632,8 +632,12 @@ if (!identical(calibrated_eir_file, "none")) {
 # table is derived from the site file, so it stays in data_private/ and is read from the
 # package root, not from the frozen code. ITN_DIST_FILE names another table; "none" keeps the
 # site file's distributions.
+# "retsc" is the smooth-compact fit, "ret" the exponential one; 06b writes both
+# names, since matching on the mean leaves them quoting the same days.
 itn_dist_file <- Sys.getenv("ITN_DIST_FILE", file.path(ATNET_PATH, "data_private", "itn_distribution",
-                                                       sprintf("itn_input_dist_ret%d.csv", round(retention_time))))
+                                                       sprintf("itn_input_dist_%s%d.csv",
+                                                               if (retention_form == "smoothcompact") "retsc" else "ret",
+                                                               round(retention_time))))
 itn_dist     <- NULL
 itn_dist_md5 <- NA_character_
 if (!identical(itn_dist_file, "none")) {

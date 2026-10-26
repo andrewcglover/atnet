@@ -92,7 +92,7 @@ priors <- atn_priors()
 # x_grid_step controls the resolution at which r(x) is evaluated for
 # the posterior curves; finer = smoother, slower.
 x_min          <- -12
-x_max          <-  12
+x_max          <-  16
 x_grid_step    <-   0.1
 
 # How many posterior draws the mean-EIP curves are computed over. See the note
@@ -105,6 +105,17 @@ x_major_breaks <- seq(-14, 14, by = 2)
 x_minor_breaks <- seq(-14, 14, by = 1)
 y_major_breaks <- seq(0, 50, by = 5)
 y_minor_breaks <- seq(0, 50, by = 1)
+
+# Lower clip on the empirical overlay. Until 2026-10-26 this was the prior's
+# EIP floor (atn_priors()$eip_floor, 7 days), applied with pmax() to the point
+# estimate and to both ends of every interval. That floor is a constraint on
+# the FITTED baseline EIP, not a statement about what one experiment's observed
+# prevalence implies, so imposing it on the data overlay silently pushed the
+# noisiest experiments up onto an artificial line at 7 days. -Inf leaves the
+# implied values as they come; implied_tau_ctl() and implied_tau_scaled()
+# already keep them at or above 0.1 days, so nothing can run away. Set this to
+# priors$eip_floor to restore the old behaviour.
+overlay_eip_floor <- -Inf
 
 # ==== Editable rate-plot configuration =======================================
 # Controls the "relative EIP progression rate" panels: rho(s)/rho vs
@@ -306,6 +317,67 @@ compute_r_matrix_hill <- function(pars, x_grid, d) {
   out
 }
 
+# ==== Individual-mosquito EIP percentiles ====================================
+#
+# The credible interval on the curves above is uncertainty about the MEAN EIP.
+# It is NOT where individual mosquitoes fall, and has been read that way by
+# more than one reader, so both panels now also carry the spread of mosquitoes
+# themselves.
+#
+# Under the model a mosquito finishes when accumulated progression crosses an
+# Erlang(R, 1) threshold, so its own EIP T has
+#
+#     F_T(t) = Pr(Gamma(R, 1) <= G(t)) = pgamma(G(t), R, 1),
+#
+# and the q-th percentile solves G(T_q) = qgamma(q, R, 1). That is a root-find
+# on a strictly increasing function, not a quadrature, so the whole thing costs
+# a small fraction of the E[T] pass: G is evaluated once per (draw, x) on a
+# shared t grid, where E[T] needs about sixty evaluations per (draw, x).
+#
+# Two quantities, because they answer different questions:
+#
+#   per_draw    percentiles within a single posterior draw, then summarised
+#               across draws. This is mosquito-to-mosquito spread at a KNOWN
+#               kernel, and its own uncertainty has to be shown separately --
+#               the thing that makes a figure busy.
+#   predictive  percentiles of the mixture over draws: where a new mosquito
+#               falls given the data. Parameter uncertainty is inside the
+#               number already, so one pair of lines is the whole statement and
+#               there is no second band to be mistaken for the first. This is
+#               the one to plot.
+#
+# t_max must be past the 97.5th percentile everywhere or the interpolation
+# clamps; it is checked and grown rather than assumed.
+eip_percentiles <- function(spec, pars, x_grid, d,
+                            probs = c(0.025, 0.975),
+                            t_max, n_t = 801L) {
+  n    <- length(pars$rho)
+  nx   <- length(x_grid)
+  np   <- length(probs)
+  qgam <- qgamma(probs, shape = d, rate = 1)
+
+  per_draw   <- array(NA_real_, c(n, nx, np))
+  predictive <- matrix(NA_real_, nx, np)
+
+  for (j in seq_len(nx)) {
+    repeat {
+      t_grid <- seq(0, t_max, length.out = n_t)
+      Fm     <- matrix(NA_real_, n, n_t)
+      ok     <- TRUE
+      for (k in seq_len(n)) {
+        Gt <- spec$make_G(x_grid[j], pars, k)(t_grid)
+        if (Gt[n_t] < max(qgam)) { ok <- FALSE; break }
+        Fm[k, ] <- pgamma(Gt, shape = d, rate = 1)
+        per_draw[k, j, ] <- stats::approx(Gt, t_grid, xout = qgam)$y
+      }
+      if (ok) break
+      t_max <- t_max * 1.5
+    }
+    predictive[j, ] <- stats::approx(colMeans(Fm), t_grid, xout = probs)$y
+  }
+  list(per_draw = per_draw, predictive = predictive, probs = probs)
+}
+
 # ==== Relative EIP progression rate at time s since ATN exposure ============
 # rho(s) / rho = 1 - (1 - r0_frac) * sigma(s), where sigma is the model's
 # suppression kernel: exponential exp(-zeta s) or Hill s_half^n / (s_half^n
@@ -453,6 +525,8 @@ model_spec_exp <- list(
   model     = "eip_exponential",
   par_names = c("rho", "rho0", "zeta"),
   compute_r_matrix        = compute_r_matrix_exp,
+  make_G    = function(delta, pars, k) make_G_exp(delta, pars$rho[k],
+                                                  pars$rho0[k], pars$zeta[k]),
   compute_rel_rate_matrix = compute_rel_rate_matrix_exp,
   implied_tau_trt_fn      = implied_tau_trt_exp,
   median_pars             = function(post) list(rho = median(post$rho),
@@ -465,6 +539,10 @@ model_spec_hill <- list(
   model     = "eip_hill",
   par_names = c("rho", "rho0", "s_half", "nH"),
   compute_r_matrix        = compute_r_matrix_hill,
+  make_G    = function(delta, pars, k) make_G_hill(delta, pars$rho[k],
+                                                   pars$rho0[k],
+                                                   pars$s_half[k],
+                                                   pars$nH[k]),
   compute_rel_rate_matrix = compute_rel_rate_matrix_hill,
   implied_tau_trt_fn      = implied_tau_trt_hill,
   median_pars             = function(post) list(rho    = median(post$rho),
@@ -534,7 +612,7 @@ common_coord <- coord_cartesian(xlim = c(x_min, x_max), clip = "off")
 # ==== Per-model processing function ==========================================
 
 process_model <- function(spec, n_draws_to_plot = 100,
-                          jitter_w = 0.5, dodge_w = 1.5) {
+                          jitter_w = 0.3, dodge_w = 1.5) {
 
   fit_path <- file.path(fit_dir, paste0(spec$model, ".rds"))
   if (!file.exists(fit_path)) {
@@ -567,14 +645,37 @@ process_model <- function(spec, n_draws_to_plot = 100,
   idx_curve   <- if (n_draws_curve < n_draws_all) {
     sort(sample(n_draws_all, n_draws_curve))
   } else seq_len(n_draws_all)
-  post    <- lapply(post, function(v) v[idx_curve])
-  n_draws <- length(idx_curve)
+  post_full <- post
+  post      <- lapply(post, function(v) v[idx_curve])
+  n_draws   <- length(idx_curve)
 
   # ---- Posterior mean-EIP curves ------------------------------------------
   cat("[", spec$label, "] computing mean EIP over ", n_draws, " of ",
       n_draws_all, " posterior draws and ", length(x_grid), " x values...\n",
       sep = "")
-  r_all <- spec$compute_r_matrix(post, x_grid, d)
+  # The E[T] pass is the one genuinely expensive thing here (minutes), and it
+  # depends only on the fit, the draws used and the grid. Cache it on those, so
+  # changing anything downstream -- an overlay rule, a new panel, a colour --
+  # costs seconds rather than another full pass. The cache carries idx_curve as
+  # well as the matrix, so a hit reuses the same draws and the figure does not
+  # quietly shift between runs.
+  cache_file <- file.path(fig_dir, paste0(spec$model, "_rall_cache.rds"))
+  cache_key  <- list(fit_mtime = as.numeric(file.mtime(fit_path)),
+                     fit_size  = file.size(fit_path),
+                     n_draws_curve = n_draws_curve,
+                     x_grid = x_grid, d = d, par_names = spec$par_names)
+  cached <- if (file.exists(cache_file)) readRDS(cache_file) else NULL
+  if (!is.null(cached) && identical(cached$key, cache_key)) {
+    cat("[", spec$label, "] reusing cached mean-EIP matrix.\n", sep = "")
+    idx_curve <- cached$idx_curve
+    post      <- lapply(post_full, function(v) v[idx_curve])
+    n_draws   <- length(idx_curve)
+    r_all     <- cached$r_all
+  } else {
+    r_all <- spec$compute_r_matrix(post, x_grid, d)
+    saveRDS(list(key = cache_key, idx_curve = idx_curve, r_all = r_all),
+            cache_file)
+  }
 
   idx_sub  <- sample(n_draws, n_draws_to_plot)
   df_draws <- do.call(rbind, lapply(idx_sub, function(k) {
@@ -586,6 +687,58 @@ process_model <- function(spec, n_draws_to_plot = 100,
     lower  = apply(r_all, 2, quantile, probs = 0.025),
     upper  = apply(r_all, 2, quantile, probs = 0.975)
   )
+
+  # ---- Individual-mosquito EIP percentiles --------------------------------
+  cat("[", spec$label, "] individual-mosquito percentiles...\n", sep = "")
+  # Cost note (measured 2026-10-26). This step evaluates G once per (draw, x)
+  # on a shared t grid, which SOUNDS cheap beside E[T] -- but for the Hill
+  # kernel G is itself hill_J, three 32-node quadrature blocks with an outer()
+  # allocation per element, so the per-element cost is real and an 801-point
+  # grid over 2000 draws ran past an hour without finishing. The exponential
+  # kernel, whose G is closed form, took about five minutes.
+  #
+  # Neither quantity needs that resolution. The predictive percentile is an
+  # average over draws and the per-draw figure is a median, so a few hundred
+  # draws settle both far inside the width of a plotted line, and the
+  # interpolation runs along a smooth monotone curve where a coarser grid costs
+  # a hundredth of a day. 300 draws on a 241-point grid is about 4% of the work.
+  n_draws_pct <- min(300L, n_draws)
+  idx_pct     <- sort(sample(n_draws, n_draws_pct))
+  pct <- eip_percentiles(spec, lapply(post, function(v) v[idx_pct]),
+                         x_grid, d, n_t = 241L,
+                         t_max = 2.5 * max(r_all, na.rm = TRUE))
+  pct_labels <- c("lo", "hi")
+  df_pred_range <- data.frame(
+    x     = rep(x_grid, times = 2),
+    bound = rep(pct_labels, each = length(x_grid)),
+    value = c(pct$predictive[, 1], pct$predictive[, 2])
+  )
+  # The same percentiles taken within each draw, kept so the figure can show
+  # how little the two definitions differ -- or report it in a caption.
+  df_draw_range <- do.call(rbind, lapply(seq_along(pct_labels), function(i) {
+    data.frame(
+      x      = x_grid,
+      bound  = pct_labels[i],
+      median = apply(pct$per_draw[, , i], 2, median),
+      lower  = apply(pct$per_draw[, , i], 2, quantile, probs = 0.025),
+      upper  = apply(pct$per_draw[, , i], 2, quantile, probs = 0.975)
+    )
+  }))
+
+  # Baseline arm: no exposure, so G(t) = rho * t exactly and the EIP is exactly
+  # Erlang(R, rho). Both percentile definitions are then closed form.
+  base_q <- outer(qgamma(pct$probs, shape = d, rate = 1), post$rho, "/")
+  df_baseline_range <- data.frame(
+    x     = rep(x_grid, times = 2),
+    bound = rep(pct_labels, each = length(x_grid))
+  )
+  base_pred <- vapply(pct$probs, function(q) {
+    stats::uniroot(function(t) mean(pgamma(post$rho * t, d, 1)) - q,
+                   interval = c(1e-6, 5 * d / min(post$rho)))$root
+  }, numeric(1))
+  df_baseline_range$value  <- rep(base_pred, each = length(x_grid))
+  df_baseline_range$median <- rep(apply(base_q, 1, median),
+                                  each = length(x_grid))
 
   # ---- Baseline-EIP per posterior draw ------------------------------------
   # Same thinned draws as the curves, so the grey and orange bands are built
@@ -605,7 +758,7 @@ process_model <- function(spec, n_draws_to_plot = 100,
   # ---- Empirical EIP overlay (uses model medians) -------------------------
   days <- sort(unique(dat$tau_obs))
   make_row <- function(pos, n, tau_obs, delta_val, arm_label,
-                       eip_floor = priors$eip_floor) {
+                       eip_floor = overlay_eip_floor) {
     p_hat <- (pos + 0.5) / (n + 1)
     p_lo  <- qbeta(0.025, pos + 0.5, n - pos + 0.5)
     p_hi  <- qbeta(0.975, pos + 0.5, n - pos + 0.5)
@@ -758,6 +911,24 @@ process_model <- function(spec, n_draws_to_plot = 100,
          width = 8, height = 5, dpi = 200, bg = "white")
   ggsave(out_path("cri_with_data"),   p_cri_data,
          width = 8, height = 5, dpi = 200, bg = "white")
+
+  # ---- Plot-ready frames, for figures that reuse this panel ---------------
+  # Saved rather than recomputed: E[T] costs a quadrature per (draw, x), so a
+  # figure that rebuilt these would take minutes and could drift from the panel
+  # published here. Read with readRDS(); see analysis/14_plot_fig_kernels.R.
+  saveRDS(list(cri          = df_cri,
+               baseline_cri = df_baseline_cri,
+               overlay      = data_overlay,
+               pred_range     = df_pred_range,      # predictive 95% of mosquitoes
+               draw_range     = df_draw_range,      # per-draw version + its CrI
+               baseline_range = df_baseline_range,  # the same for the control arm
+               pct_probs      = pct$probs,
+               days         = days,
+               erlang_shape = d,
+               colours      = c(posterior = posterior_colour,
+                                baseline  = baseline_colour),
+               fit_dir      = fit_dir),
+          file.path(fig_dir, paste0(spec$model, "_plotdata.rds")))
 
   # ---- Relative EIP progression rate panels ------------------------------
   # rho(s) / rho vs time s since ATN exposure. The s_grid contains 0

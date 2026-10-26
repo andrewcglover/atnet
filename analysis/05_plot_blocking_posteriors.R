@@ -45,9 +45,19 @@ suppressPackageStartupMessages({
   library(rstan)
   library(ggplot2)
   library(dplyr)
-  library(ggokabeito)
   library(ggnewscale)
 })
+
+# The Okabe-Ito qualitative palette, in its published order (Okabe & Ito 2008;
+# the sequence ggokabeito's palette_okabe_ito() and scale_*_okabe_ito() return
+# at their default order, verified against the figures this script wrote on
+# 2026-10-09). Written out here so the script does not need ggokabeito itself,
+# which is not installed on every machine this runs on, for what amounts to
+# eight hex codes.
+okabe_ito <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442",
+               "#0072B2", "#D55E00", "#CC79A7", "#999999")
+scale_color_okabe_ito <- function() scale_colour_manual(values = okabe_ito)
+scale_fill_okabe_ito  <- function() scale_fill_manual(values  = okabe_ito)
 
 args <- commandArgs(trailingOnly = TRUE)
 fit_dir <- if (length(args)) {
@@ -362,7 +372,7 @@ overlay_field_tba <- add_jitter(overlay_field_tba, jitter_w = 0.3, seed = 123)
 overlay_tba_lab   <- add_jitter(overlay_tba_lab,   jitter_w = 0.3, seed = 123)
 
 # ---- Plot 1: field TBA posterior median + 95% CrI ----
-field_TBA_col <- ggokabeito::palette_okabe_ito()[2]
+field_TBA_col <- okabe_ito[2]
 p_field <- ggplot(df_tba_field, aes(x = x)) +
   geom_ribbon(aes(ymin = lower, ymax = upper),
               alpha = 0.3, fill = field_TBA_col) +
@@ -454,6 +464,17 @@ df_facet_overlay <- as_panels(list(overlay_tra, overlay_field_tba,
                                    overlay_tba_lab))
 df_facet_prior   <- as_panels(list(df_prior_lab, df_prior_field,
                                    df_prior_lab))
+
+# ---- Plot-ready frames, for figures that reuse these curves ---------------
+# One source of truth for the posterior curves, the empirical overlays and the
+# panel naming; see analysis/14_plot_fig_kernels.R.
+saveRDS(list(curves       = df_facet_curve,
+             overlay      = df_facet_overlay,
+             priors       = df_facet_prior,
+             panel_levels = panel_levels,
+             panel_labels = panel_labels,
+             fit_dir      = fit_dir),
+        fig("blocking_plotdata.rds"))
 
 p_facet <- ggplot(df_facet_curve, aes(x = x)) +
   geom_ribbon(aes(ymin = lower, ymax = upper, fill = panel),

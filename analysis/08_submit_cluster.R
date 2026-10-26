@@ -50,7 +50,7 @@ BATCH_SETTINGS <- c("OUT_SUFFIX", "HUMAN_POP", "END_DAY", "HISTORY_DIR", "ANTIMA
                     "SWEEP_ARMS", "NET_RETENTION_DAYS", "ATN_DELTAQ", "ATN_SPOR_LEN",
                     "OMEGA_QUANTILE", "P_A_QUANTILE", "ATN_MECHANISM",
                     "FUTURE_RETENTION_DAYS", "ATN_DECAY_FORM", "ATN_DECAY_ZERO_YEARS",
-                    "RETENTION_FORM", "PROJ_ROOT")
+                    "RETENTION_FORM", "CAMPAIGN_INTERVAL_YEARS", "PROJ_ROOT")
 
 # Nodes to keep work off, comma separated (HIPERCOW_EXCLUDE_NODES; empty for none). Two
 # things make this worth having: a node that cannot start work at all fails in seconds and is

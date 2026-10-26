@@ -358,7 +358,19 @@ human_pop      <- as.integer(Sys.getenv("HUMAN_POP", "100000"))
 if (is.na(human_pop) || human_pop < 1L) {
   stop("HUMAN_POP must be a positive whole number, not '", Sys.getenv("HUMAN_POP"), "'.", call. = FALSE)
 }
-n_future_years <- 7L      # 2025-2031: campaigns in 2025, 2028 and 2031
+n_future_years <- 7L      # 2025-2031
+# CAMPAIGN_INTERVAL_YEARS: years between future mass campaigns. The default 3
+# gives the paper's 2025, 2028, 2031; 2 gives 2025, 2027, 2029, 2031. The first
+# and last campaign are the same either way, so both schedules start from the
+# identical end-2024 state and end together. Only which months of the monthly
+# distribution grid carry campaign_cov changes, so n_atn and every array size
+# are untouched and the saved histories still restore.
+campaign_interval_years <- as.integer(Sys.getenv("CAMPAIGN_INTERVAL_YEARS", "3"))
+if (is.na(campaign_interval_years) || campaign_interval_years < 1L ||
+    campaign_interval_years > n_future_years) {
+  stop("CAMPAIGN_INTERVAL_YEARS must be a whole number from 1 to ", n_future_years,
+       ", not '", Sys.getenv("CAMPAIGN_INTERVAL_YEARS"), "'.", call. = FALSE)
+}
 # Columns kept from 2022 on (regular expressions; daily values). The history files
 # keep every column. M_exposed_<species> is the species' ATN-exposed adults
 # (S, E and I) and total_M_<species> all its adults; see annotate().
@@ -746,16 +758,46 @@ rm(iv, irs_used)
 #    post-campaign use (Mali-specific, Glover et al. 2025). The monthly top-up
 #    coverage is the one that holds use at that floor when nets are given at
 #    random and lost at the retention rate.
+#
+#    Two things were wrong here until 2026-10-26, both making the top-up too
+#    generous, and both only in runs that depart from exponential loss at the
+#    baseline 657 days:
+#      * the closed form below assumed a memoryless curve. It is exact for the
+#        exponential and wrong for smooth-compact, where a net's chance of
+#        lasting the month depends on how old it already is. An SC net barely
+#        ages in a month (0.998 still held against the exponential's 0.955), so
+#        far fewer replacements hold the floor: the corrected coverage is about
+#        0.89 of the old one.
+#      * it used retention_time even when the future nets are FUTURE_RETENTION_DAYS.
+#        The floor needs 0.023 at 1.2 years and 0.008 at 3.6, so the retention
+#        sweep was handing out up to 2.2x the top-ups its own floor implies.
+#    atnet::topup_coverage() solves the steady state for whichever curve is in
+#    force, and reduces to the closed form above for the exponential (tested).
 # ---------------------------------------------------------------------
 campaign_cov  <- 0.95
 cd_floor_frac <- 0.3
 cd_interval   <- 365 / 12
 
-d_cd     <- exp(-cd_interval / retention_time)
+# The nets the top-ups hand out are the future ones, so the curve is theirs.
+cd_retention <- if (!is.null(future_retention)) future_retention else retention_time
+# Written out rather than taken from netz: netz is 06b's, it runs on the
+# desktop, and it is neither a dependency of atnet nor in the cluster library.
+# Same curve -- atnet's tests check it against netz::net_loss_map to 1e-12.
+cd_retained  <- if (retention_form == "smoothcompact") {
+  sc_cd <- atnet::sc_retention_params(cd_retention)
+  l_cd  <- sc_cd$half_life / sqrt(1 - sc_cd$k / (sc_cd$k - log(0.5)))
+  function(a) {
+    x <- pmin(a / l_cd, 1)
+    ifelse(a >= l_cd, 0, exp(-sc_cd$k * x^2 / (1 - x^2)))
+  }
+} else {
+  function(a) exp(-a / cd_retention)
+}
 cd_floor <- cd_floor_frac * campaign_cov
-cd_cov   <- cd_floor * (1 - d_cd) / (1 - cd_floor * d_cd)
-message(sprintf("CD: campaign_cov=%.2f -> floor=%.4f, monthly_top-up_cov=%.4f",
-                campaign_cov, cd_floor, cd_cov))
+cd_cov   <- atnet::topup_coverage(cd_floor, cd_interval, cd_retained)
+message(sprintf(
+  "CD: campaign_cov=%.2f -> floor=%.4f, monthly_top-up_cov=%.5f (%s loss, %g d)",
+  campaign_cov, cd_floor, cd_cov, retention_form, cd_retention))
 
 # ---------------------------------------------------------------------
 # 2. Net-efficacy draws of Churcher et al. (2024): 1000 draws of dn0, rn0
@@ -936,7 +978,7 @@ if (END_DAY < n_steps) message(sprintf("END_DAY: arms stop on day %d of %d", END
 # 365-day year), and the national peak is the median across regions. The
 # campaign month is campaign_months_before_peak calendar months before the peak
 # month, wrapping into November or December for a January or February peak, so
-# the campaigns stay in the first, fourth and seventh future years and each
+# the campaigns stay on their intended future years and each
 # precedes the following peak. Each campaign takes that month's slot on the
 # monthly continuous-distribution grid (evenly spaced, so within two days of the
 # 1st), replacing that month's top-up; the spacing the top-up coverage was
@@ -958,7 +1000,8 @@ month_starts   <- cumsum(c(1L, 31L, 28L, 31L, 30L, 31L, 30L, 31L, 31L, 30L, 31L,
 peak_month     <- findInterval(peak_day, month_starts)
 campaign_month <- (peak_month - 1L - campaign_months_before_peak) %% 12L + 1L
 future_campaign_days <- round(future_start_day +
-  (campaign_month - 1L + 12L * seq(0L, n_future_years - 1L, by = 3L)) * cd_interval)
+  (campaign_month - 1L +
+   12L * seq(0L, n_future_years - 1L, by = campaign_interval_years)) * cd_interval)
 message(sprintf("Peak rainfall: day %g-%g by region, national median day %g (%s); campaigns in %s",
                 min(peak_days), max(peak_days), peak_day, month.name[peak_month],
                 month.name[campaign_month]))
@@ -1453,6 +1496,7 @@ run_settings <- list(
   seed_base        = SEED_BASE,
   branch_year      = branch_year,
   future_campaign_days = future_campaign_days,
+  campaign_interval_years = campaign_interval_years,
   end_day          = END_DAY,
   keep_columns     = keep_columns,
   irs_corrections  = irs_corrections
@@ -1521,6 +1565,7 @@ parallel::clusterExport(cl, c(
   "n_steps", "n_future_years", "draws_tab", "itn_draws", "net_of_arm",
   "net_of_site_type", "p_a_of_arm", "hl_fixed_years", "SEED_BASE",
   "cd_cov", "campaign_cov", "cd_interval", "retention_time", "future_retention",
+  "campaign_interval_years",
   "retention_form", "deltaq_use", "spor_len_use",
   "omega_quantile", "omega_fixed", "p_a_quantile", "p_a_fixed", "atn_mechanism",
   "population_overrides", "form_overrides", "human_pop", "future_interventions",
@@ -1618,6 +1663,7 @@ save_whole(list(
     peak_days      = peak_days,
     peak_day       = peak_day,
     campaign_months_before_peak = campaign_months_before_peak,
+    campaign_interval_years     = campaign_interval_years,
     campaign_month = campaign_month,
     cd_floor       = cd_floor,
     cd_cov         = cd_cov,

@@ -135,3 +135,52 @@ test_that("usage_to_distribution refuses points it cannot solve in turn", {
   expect_error(usage_to_distribution(c(0.3, 0.3), c(-10, 548), c(0, 365), S),
                "on or after its own distribution")
 })
+
+test_that("topup_coverage reproduces the closed form for the exponential", {
+  skip_if_not_installed("netz")
+  # Memoryless, so the steady state has the closed form 07 used to assume.
+  interval <- 365 / 12
+  closed <- function(floor, ret) {
+    d <- exp(-interval / ret); floor * (1 - d) / (1 - floor * d)
+  }
+  for (ret in c(438, 657, 1314)) for (fl in c(0.1, 0.285, 0.6)) {
+    S <- function(a) netz::net_loss_exp(a, ret)
+    expect_equal(topup_coverage(fl, interval, S), closed(fl, ret), tolerance = 1e-6)
+  }
+})
+
+test_that("topup_coverage needs fewer nets under smooth-compact", {
+  skip_if_not_installed("netz")
+  interval <- 365 / 12
+  for (ret in c(438, 657, 1314)) {
+    sc <- sc_retention_params(ret)
+    e <- topup_coverage(0.285, interval, function(a) netz::net_loss_exp(a, ret))
+    s <- topup_coverage(0.285, interval, function(a) netz::net_loss_map(a, sc$half_life, sc$k))
+    # an SC net barely ages in a month, so fewer replacements hold the floor
+    expect_lt(s, e)
+    expect_gt(s / e, 0.8)
+  }
+})
+
+test_that("the coverage it returns really does hold the floor", {
+  skip_if_not_installed("netz")
+  interval <- 365 / 12
+  sc <- sc_retention_params(657)
+  S  <- function(a) netz::net_loss_map(a, sc$half_life, sc$k)
+  cc <- topup_coverage(0.285, interval, S)
+  # drive net_usage() to steady state with that coverage and check where it lands
+  dt <- seq(0, 400) * interval
+  u  <- net_usage(max(dt), rep(cc, length(dt)), dt, S)
+  expect_equal(u, 0.285, tolerance = 1e-6)
+})
+
+test_that("topup_coverage checks its arguments", {
+  S <- function(a) exp(-a / 657)
+  expect_error(topup_coverage(0, 30, S), "strictly between 0 and 1")
+  expect_error(topup_coverage(1, 30, S), "strictly between 0 and 1")
+  expect_error(topup_coverage(0.3, 0, S), "one positive number")
+  # a floor nobody can hold: nets gone long before the next round
+  # unreachable only if the curve starts below the floor: here half the nets
+  # are never held at all, so use can never exceed 0.5
+  expect_error(topup_coverage(0.9, 30, function(a) 0.5 * exp(-a / 657)), "cannot be held")
+})

@@ -116,3 +116,48 @@ usage_to_distribution <- function(usage, usage_times, distribution_times,
   }
   cov
 }
+
+#' The top-up coverage that holds net use at a floor
+#'
+#' Continuous distribution hands out nets to a share of people at a fixed
+#' interval, to keep use from falling away between mass campaigns. This is the
+#' share that holds use at `floor` once the process has settled.
+#'
+#' In steady state a person's most recent top-up was `j` rounds ago with
+#' probability `c (1 - c)^j`, and that net is still held with probability
+#' `S(j * interval)`, so use is
+#'
+#'   `U(c) = c * sum_j (1 - c)^j S(j * interval)`
+#'
+#' which rises with `c`, and is solved for `U(c) = floor`. Where the curve is
+#' memoryless this has the closed form `floor (1 - d) / (1 - floor d)` with
+#' `d = S(interval)`, which is what the exponential case reduces to (tested);
+#' under smooth-compact it does not, because a net's chance of surviving the
+#' month depends on how old it already is.
+#'
+#' @param floor Wanted net use between campaigns, between 0 and 1.
+#' @param interval Days between top-ups.
+#' @param retained A function of age in days giving the share of nets still held.
+#' @return The share of people to reach at each top-up.
+#' @export
+topup_coverage <- function(floor, interval, retained) {
+  if (length(floor) != 1L || !is.finite(floor) || floor <= 0 || floor >= 1) {
+    stop("floor must be one number strictly between 0 and 1.", call. = FALSE)
+  }
+  if (length(interval) != 1L || !is.finite(interval) || interval <= 0) {
+    stop("interval must be one positive number.", call. = FALSE)
+  }
+  use <- function(cc) {
+    # Terms fall away as (1 - cc)^j, and for a curve that reaches zero they
+    # stop entirely; 1e5 rounds is far beyond either, and the tail is checked.
+    j <- 0:min(1e5L, ceiling(log(1e-15) / log1p(-cc)))
+    w <- (1 - cc)^j * retained(j * interval)
+    cc * sum(w)
+  }
+  if (use(1 - 1e-12) <= floor) {
+    stop("A floor of ", floor, " cannot be held at this interval: even reaching ",
+         "everyone every round leaves use below it.", call. = FALSE)
+  }
+  stats::uniroot(function(cc) use(cc) - floor, c(1e-12, 1 - 1e-12),
+                 tol = .Machine$double.eps^0.5)$root
+}

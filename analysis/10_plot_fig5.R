@@ -70,7 +70,10 @@ suppressPackageStartupMessages({
 
 args <- commandArgs(trailingOnly = TRUE)
 refresh <- "refresh" %in% args
-run_dirs <- setdiff(args, "refresh")
+# "complete" plots a run that is still filling in, over the realisations every region
+# holds. Without it a part-finished run stops in read_all_series (regions must line up).
+only_complete <- "complete" %in% args
+run_dirs <- setdiff(args, c("refresh", "complete"))
 if (!length(run_dirs)) stop("Name at least one run folder.", call. = FALSE)
 settings <- readRDS(file.path(run_dirs[1], "settings.rds"))
 out_dir <- file.path("outputs", "figures", basename(run_dirs[1]))
@@ -94,6 +97,11 @@ if (any(corners %in% taken)) {
 
 # Paul Tol's "vibrant" scheme, as in June, plus dark grey for 2022-24.
 arms <- projection_arms()
+# "Pyr-only" rather than "Pyr" here, so the arm reads as a choice of net alongside Pyr-PBO
+# and Pyr-CFP rather than as a prefix (user, 2026-10-26). Overridden in this script rather
+# than in projection_arms(), which 09 and 11-13 also use: changing it there would quietly
+# relabel every other figure and summary table too.
+arms$label[arms$arm == "pyr"] <- "Pyr-only"
 arms$colour <- c("#BBBBBB", "#EE7733", "#CC3311", "#EE3377", "#009988",
                  "#0077BB", "#33BBEE")
 key_colours <- c(setNames(arms$colour, arms$arm), shared = "#555555")
@@ -138,6 +146,26 @@ summarise_series <- function(x, label) {
     mutate(region = label, year = model_year(timestep))
 }
 
+# Realisations a still-filling run holds in EVERY region. The national series adds
+# population-scaled counts across regions, so a realisation missing one region would make
+# the country look smaller rather than merely noisier -- read_all_series' stopifnot catches
+# the mismatch and stops. With "complete" the run is plotted over the realisations all nine
+# regions hold: the honest partial picture rather than no picture at all.
+complete_draws <- local({
+  cache <- NULL
+  function() {
+    if (is.null(cache)) {
+      f <- unlist(lapply(run_dirs, function(d) list.files(d, "^sweep_.*_rows.*\\.rds$")))
+      blocks <- sub("\\.rds$", "", sub("^.*_rows", "", f))
+      n <- table(blocks)
+      whole <- names(n)[n == length(geo_grid$region)]
+      cache <<- sort(unlist(lapply(strsplit(whole, "-"), function(p)
+        seq.int(as.integer(p[[1]]), as.integer(p[[2]])))))
+    }
+    cache
+  }
+})
+
 # One region's daily counts, the 2022-24 stretch repeated for every arm,
 # sorted so that regions line up with each other row for row.
 region_counts <- function(region) {
@@ -146,6 +174,7 @@ region_counts <- function(region) {
                                         "n_age_730_3649"))
   x <- x[c("timestep", "arm", "draw", "n_detect_lm_730_3649",
            "n_age_730_3649")]
+  if (only_complete) x <- x[x$draw %in% complete_draws(), , drop = FALSE]
   pre <- x[x$arm == "2022-2024", ]
   x <- rbind(x[x$arm %in% arms$arm, ],
              do.call(rbind, lapply(arms$arm, function(a) transform(pre, arm = a))))
@@ -328,7 +357,7 @@ region_panel <- function(region, keys, show_daily, show_bands, tag = NULL) {
   }
   if (show_daily) {
     p <- p + geom_line(data = pick(line_data(daily, display_arms, TRUE)),
-                       linewidth = 0.4, alpha = 0.2)
+                       linewidth = 0.4, alpha = 0.4)
   }
   p +
     geom_line(data = pick(line_data(rolling, display_arms, FALSE)),
@@ -378,19 +407,24 @@ national_panel <- function(keys, show_daily, show_bands) {
   }
   if (show_daily) {
     p <- p + geom_line(data = pick(line_data(nat_daily, display_arms, TRUE)),
-                       linewidth = 0.4, alpha = 0.2)
+                       linewidth = 0.4, alpha = 0.4)
   }
   p +
     geom_line(data = pick(line_data(nat_rolling, display_arms, FALSE)),
               linewidth = 0.8, na.rm = TRUE) +
     scale_colour_manual(values = key_colours, guide = "none") +
     scale_fill_manual(values = key_colours, guide = "none") +
-    scale_x_continuous(breaks = seq(2024, 2030, 2), limits = c(x_from, x_to)) +
+    # Minor gridlines every year and every 5 PfPR points, so the national panel can be read
+    # off between its labelled ticks (user, 2026-10-26). The minor grid must not be blanked
+    # in the theme below or these are silently discarded.
+    scale_x_continuous(breaks = seq(2024, 2030, 2), minor_breaks = seq(2024, 2032, 1),
+                       limits = c(x_from, x_to)) +
     facet_wrap(~ panel) +
-    scale_y_continuous(breaks = seq(0, 100, 10), limits = c(0, top)) +
+    scale_y_continuous(breaks = seq(0, 100, 10), minor_breaks = seq(0, 100, 5),
+                       limits = c(0, top)) +
     labs(x = NULL, y = NULL, tag = "A") +
     theme_minimal(base_size = 13) +
-    theme(panel.grid.minor = element_blank(),
+    theme(
           strip.text = element_text(size = 13),
           plot.tag = element_text(size = 18, face = "bold"),
           plot.background = element_rect(colour = "grey40", fill = NA,
@@ -401,7 +435,10 @@ national_panel <- function(keys, show_daily, show_bands) {
 # A plot holding only the legend (no data are drawn). It carries the "A"
 # tag in the layout where it sits in the top left corner, and none in the
 # one where the national inset has taken that corner.
-legend_panel <- function(keys, title, show_bands, tag = "A") {
+# `scale` shrinks the key and its text together (0.82 = about 18% smaller), for layouts
+# where the legend shares a row with map panels rather than having a corner to itself.
+# 0.92 after 0.82 proved too small to read comfortably (user, 2026-10-26).
+legend_panel <- function(keys, title, show_bands, tag = "A", scale = 1) {
   d <- data.frame(key = factor(keys, levels = keys), year = NA_real_,
                   value = NA_real_)
   p <- ggplot(d, aes(year, value, colour = key, fill = key))
@@ -416,11 +453,13 @@ legend_panel <- function(keys, title, show_bands, tag = "A") {
     scale_fill_manual(values = key_colours, limits = keys,
                       labels = key_labels[keys], name = title) +
     labs(tag = tag) +
-    theme_void(base_size = 13) +
+    theme_void(base_size = 13 * scale) +
     theme(legend.position = "inside",
           legend.position.inside = c(0.5, 0.5),
-          legend.key.width = unit(2, "lines"),
-          legend.text = element_text(size = 13),
+          legend.key.width = unit(2 * scale, "lines"),
+          legend.key.height = unit(1.2 * scale, "lines"),
+          legend.text = element_text(size = 13 * scale),
+          legend.title = element_text(size = 13 * scale),
           plot.tag = element_text(size = 18, face = "bold"))
 }
 
@@ -439,18 +478,82 @@ message(sprintf("Panel B covers %s, %s %d to %s %d", country,
                 model_month(cycle["from"]), floor(model_year(cycle["from"])),
                 model_month(cycle["to"]), floor(model_year(cycle["to"]))))
 
-panel_b <- ggplot(averted, aes(median, label, colour = arm)) +
+# The same panel against any comparator, so the figure can show what each net adds over no
+# future nets AND over the nets a programme might otherwise deploy. Contrasts stay paired
+# within the realisation, and the comparator arm drops out (its contrast with itself is 0).
+averted_vs <- function(cmp) {
+  raw <- arm_contrasts(national, comparator = cmp)
+  a <- summarise_rows(raw, "cases_averted_per1000", digits = 0)
+  # "No future nets" is dropped -- panel C already covers it, and it would stretch the
+  # shared axis past -400 and squash the contrasts these panels exist to show. The
+  # COMPARATOR ITSELF IS KEPT: its contrast with itself is exactly 0, so it shows as a dot
+  # on the line, which keeps every panel in the same order and makes the reference explicit
+  # rather than leaving a gap to work out (user, 2026-10-26).
+  keep <- setdiff(arms$arm, "none")
+  a <- a[a$arm %in% keep, , drop = FALSE]
+  # arm_contrasts() returns no row for the comparator against itself, so add the zero it
+  # stands for: without it the row is an empty slot rather than a dot on the line.
+  if (!cmp %in% a$arm) {
+    z <- a[1, , drop = FALSE]
+    z[] <- lapply(z, function(col) if (is.numeric(col)) 0 else col[[1]])
+    z$arm <- cmp
+    a <- rbind(a, z)
+  }
+  a$label <- factor(arms$label[match(a$arm, arms$arm)],
+                    levels = rev(arms$label[match(keep, arms$arm)]))
+  # Posterior probability that this arm averts MORE cases than the comparator: the share of
+  # realisations whose paired contrast is positive. Exactly 0 for the comparator against
+  # itself, which is meaningless, so that row is left blank.
+  p <- tapply(raw$cases_averted_per1000 > 0, raw$arm, mean)
+  a$p_better <- ifelse(a$arm == cmp, NA_real_, p[a$arm])
+  a
+}
+
+averted_panel <- function(a, xlab, tag, xlim = NULL, y_labels = TRUE,
+                          x_text = NULL, x_breaks = waiver(), x_minor = waiver()) {
+  # The probability column is drawn INSIDE the panel at a fixed x rather than on a secondary
+  # axis: an axis title can only sit rotated beside its axis, and the column wants a plain
+  # horizontal heading above it (user, 2026-10-26). Placing the figures at a y given by the
+  # discrete level keeps each one on its own dot and whisker.
+  lev <- levels(a$label)
+  p <- ggplot(a, aes(median, label, colour = arm)) +
   geom_vline(xintercept = 0, colour = "grey60", linewidth = 0.4) +
   geom_linerange(aes(xmin = lower, xmax = upper), linewidth = 1) +
-  geom_point(size = 3) +
+  geom_point(size = 2.4) +
   scale_colour_manual(values = key_colours, guide = "none") +
-  scale_x_continuous(limits = c(min(0, averted$lower), NA),
+  scale_y_discrete(limits = lev, labels = if (y_labels) waiver() else NULL,
+                   expand = expansion(add = c(0.6, 1.1))) +
+  scale_x_continuous(limits = if (is.null(xlim)) c(min(0, a$lower), NA) else xlim,
+                     breaks = x_breaks, minor_breaks = x_minor,
                      expand = expansion(mult = c(0, 0.05))) +
-  labs(x = "Clinical cases averted per 1,000\npeople per year vs no future nets",
-       y = NULL, tag = "B") +
+  labs(x = xlab, y = NULL, tag = tag)
+  if (!is.null(x_text)) {
+    txt <- data.frame(label = factor(lev, levels = lev),
+                      p = a$p_better[match(lev, a$label)])
+    # A dash for the comparator against itself, rather than a blank: it marks the row as
+    # deliberately not applicable instead of looking like a value that failed to print.
+    # Written as an escape so the file's encoding cannot mangle it.
+    txt$shown <- ifelse(is.na(txt$p), "–", sprintf("%.0f%%", 100 * txt$p))
+    p <- p +
+      # Both centred on x_text, which sits far enough inside the axis end that the heading
+      # -- much wider than "100%" -- still clears the panel edge. Centring it at the
+      # old 500 against a 600 axis was what clipped F's closing bracket.
+      geom_text(data = txt, aes(x = x_text, y = label, label = shown),
+                inherit.aes = FALSE, size = 4.2, colour = "grey25", hjust = 0.5) +
+      annotate("text", x = x_text, y = length(lev) + 0.85, label = "P(averts more)",
+               size = 3.9, colour = "grey25", fontface = "plain", hjust = 0.5) +
+      # Let the heading overflow into the plot margin rather than be cut by the panel. The
+      # rightmost of the three panels has slightly less usable width than the other two --
+      # it abuts the figure edge -- so with clipping on it lost its closing bracket at every
+      # column position tried, however much clear space sat to its right.
+      coord_cartesian(clip = "off")
+  }
+  p +
   theme_minimal(base_size = 13) +
   theme(panel.grid.major.y = element_blank(),
-        panel.grid.minor = element_blank(),
+        # Only the Y minor grid is blanked. Blanking the whole minor grid silently threw
+        # away the minor_breaks set on the x scale, so the fine ticks never appeared.
+        panel.grid.minor.y = element_blank(),
         axis.text.y = element_text(size = 13, colour = "black"),
         plot.tag = element_text(size = 18, face = "bold"),
         # A rule round the inset, set in from the edge of its cell so the
@@ -458,7 +561,72 @@ panel_b <- ggplot(averted, aes(median, label, colour = arm)) +
         # the figure.
         plot.background = element_rect(colour = "grey40", fill = NA,
                                        linewidth = 0.4),
-        plot.margin = margin(12, 12, 12, 12))
+        plot.margin = margin(12, 12, 12, 12)) +
+  # D-F carry their label on one line across a panel a third of the figure wide, so it
+  # needs a point less than panel C's two-line version to sit inside its panel.
+  (if (is.null(x_text)) NULL else theme(axis.title.x = element_text(size = 11.6)))
+}
+
+panel_b <- averted_panel(averted,
+  "Annual clinical cases averted per\n1,000 people vs no future nets", "B",
+  x_minor = seq(0, 900, by = 50))
+
+# D-F: the same against the nets a programme might otherwise deploy. One x range across the
+# three so the benefit shrinking as the comparator strengthens is read off the page rather
+# than from the axis labels.
+extra_cmp <- c(pyr = "Pyr-only", pyr_pbo = "Pyr-PBO", pyr_cfp = "Pyr-CFP")
+extra_averted <- lapply(names(extra_cmp), averted_vs)
+names(extra_averted) <- names(extra_cmp)
+# A fixed range for D-F, shared so the three are directly comparable, with the right-hand
+# stretch beyond 400 left clear of ticks so the probability column does not collide with
+# axis labels or gridlines (user, 2026-10-26). Ticks therefore stop at 400 while the axis
+# runs to 600, and the figures sit at 500.
+extra_xlim  <- c(-600, 1150)
+extra_breaks <- seq(-600, 600, by = 200)
+extra_minor <- seq(-600, 650, by = 50)
+extra_xtext <- 950
+local({
+  r <- range(unlist(lapply(extra_averted, function(a) c(a$lower, a$upper))))
+  if (r[[1]] < extra_xlim[[1]] || r[[2]] > 550) {
+    message(sprintf("NOTE: contrasts span %.0f to %.0f; the fixed D-F axis is %.0f to %.0f ",
+                    r[[1]], r[[2]], extra_xlim[[1]], extra_xlim[[2]]),
+            "with ticks to 400, so some intervals may run under the probability column.")
+  }
+})
+# No y tick labels in D-F: the arms are already named down the side of panel C and keyed by
+# colour in the legend, and repeating seven names three more times crowds panels that are a
+# third of the width (user, 2026-10-26).
+extra_panels <- Map(function(nm, tag) {
+  averted_panel(extra_averted[[nm]],
+                sprintf("Annual cases averted per 1,000 vs %s", extra_cmp[[nm]]),
+                tag, xlim = extra_xlim, y_labels = FALSE, x_text = extra_xtext,
+                x_breaks = extra_breaks, x_minor = extra_minor)
+}, names(extra_cmp), c("D", "E", "F"))
+
+# G-I: the same again against the three ATN arms, for the figure that carries all of them.
+# Its own x range, not D-F's: these contrasts reach -546 (Pyr-only against Pyr-CFP-ATN),
+# which D-F's -450 would drop entirely rather than truncate. Same shape though -- data
+# region, then a clear strip of the same width holding the probability column.
+atn_cmp <- c(atn = "ATN", pyr_atn = "Pyr-ATN", pyr_cfp_atn = "Pyr-CFP-ATN")
+atn_averted <- lapply(names(atn_cmp), averted_vs)
+names(atn_averted) <- names(atn_cmp)
+atn_xlim   <- extra_xlim
+atn_breaks <- extra_breaks
+atn_minor  <- extra_minor
+atn_xtext  <- extra_xtext
+local({
+  r <- range(unlist(lapply(atn_averted, function(a) c(a$lower, a$upper))))
+  if (r[[1]] < atn_xlim[[1]] || r[[2]] > 450) {
+    message(sprintf("NOTE: ATN-comparator contrasts span %.0f to %.0f, outside the G-I ",
+                    r[[1]], r[[2]]), "data region of -600 to 450.")
+  }
+})
+atn_panels <- Map(function(nm, tag) {
+  averted_panel(atn_averted[[nm]],
+                sprintf("Annual cases averted per 1,000 vs %s", atn_cmp[[nm]]),
+                tag, xlim = atn_xlim, y_labels = FALSE, x_text = atn_xtext,
+                x_breaks = atn_breaks, x_minor = atn_minor)
+}, names(atn_cmp), c("G", "H", "I"))
 
 y_title <- wrap_elements(full = grid::textGrob(
   expression(italic(Pf) * PR[2 - 10] * " (%)"), rot = 90,
@@ -482,11 +650,22 @@ scaled <- function(p, s = 0.9) {
 # panels do not. `nat_keys` lets it show fewer arms than they do, since
 # seven bands laid over each other are a muddle however much room there
 # is.
+#
+# `comparators` adds a bottom row of three more cases-averted panels (D-F), against the
+# nets a programme might otherwise deploy rather than against no future nets. For that row
+# the column grid is refined threefold -- five map columns do not divide into thirds -- so
+# each region spans three narrow columns and each of D, E and F spans five, exactly a third
+# of the width. Its row is given twice the height of a map row, which brings A, C, D, E and
+# F to roughly one size. The legend then moves to the cell north of Gao and east of Kidal,
+# which the map leaves empty (user, 2026-10-26).
 build_figure <- function(keys, legend_title, show_daily, show_bands,
                          national = FALSE, nat_bands = show_bands,
-                         nat_keys = keys) {
+                         nat_keys = keys, comparators = FALSE, atn_comparators = FALSE) {
+  w <- if (comparators) 3L else 1L     # narrow columns per map column
+  map_col <- function(c) (c - 1L) * w + 2L            # first narrow column of map column c
   region_areas <- do.call(c, lapply(seq_len(nrow(geo_grid)), function(i) {
-    area(geo_grid$row[i], geo_grid$col[i] + 1)
+    area(geo_grid$row[i], map_col(geo_grid$col[i]),
+         geo_grid$row[i], map_col(geo_grid$col[i]) + w - 1L)
   }))
   # In the layout with the national inset the array of regions is panel B,
   # and its letter goes on the first panel read, top left of the top row
@@ -498,21 +677,48 @@ build_figure <- function(keys, legend_title, show_daily, show_bands,
                  show_bands = show_bands,
                  tag = if (national && identical(rg, first_region)) "B")
   })
+  n_row <- if (atn_comparators) 6L else if (comparators) 5L else 4L
+  last_col <- map_col(max(geo_grid$col)) + w - 1L
   fixed <- list(y_title)
   if (national) {
-    design <- c(area(1, 1, 4, 1),   # y title
-                area(1, 2, 2, 3),   # national inset, tag A
-                area(4, 2),         # legend
-                area(3, 5, 4, 6),   # panel C
+    # With the comparator row the legend sits north of Gao and east of Kidal, the cell the
+    # map leaves empty; without it, in the bottom-left cell south of Kayes as before.
+    legend_area <- if (comparators)
+      area(1, map_col(5), 1, map_col(5) + w - 1L) else area(4, 2)
+    # The y title spans the FOUR map rows, not every row: it reads PfPR2-10, which is what
+    # A and B show, while C-I are cases averted and carry their own x labels. Spanning
+    # n_row centred it over the comparator rows as well, so with six rows it sat beside
+    # Sikasso rather than beside Kayes (user, 2026-10-26).
+    design <- c(area(1, 1, 4, 1),                        # y title
+                area(1, 2, 2, map_col(2) + w - 1L),      # national inset, tag A
+                legend_area,
+                area(3, map_col(4), 4, last_col),        # panel C
                 region_areas)
     plots <- c(fixed,
                list(wrap_elements(full = scaled(national_panel(
                       nat_keys, show_daily = show_daily && !nat_bands,
                       show_bands = nat_bands))),
                     wrap_elements(full = legend_panel(keys, legend_title,
-                                                      show_bands, tag = NULL)),
+                                                      show_bands, tag = NULL,
+                                                      scale = if (comparators) 0.92 else 1)),
                     wrap_elements(full = scaled(panel_b + labs(tag = "C")))),
                panels)
+    if (comparators) {
+      # D, E, F across the bottom as ONE cell holding a row of three, not three cells of
+      # five columns each. Five columns each is equal in the grid but not on the page: the
+      # map panels above add fixed-width axis decorations into the same columns, so the
+      # three spans came out unequal and the last was visibly the narrowest. A nested
+      # wrap_plots divides its own width into exact thirds, whatever sits above it.
+      design <- c(design, area(5, 2, 5, last_col))
+      plots <- c(plots, list(wrap_elements(full = wrap_plots(
+        lapply(extra_panels, scaled), nrow = 1))))
+    }
+    if (atn_comparators) {
+      # G, H, I in a sixth row, nested the same way so their thirds match D-F's.
+      design <- c(design, area(6, 2, 6, last_col))
+      plots <- c(plots, list(wrap_elements(full = wrap_plots(
+        lapply(atn_panels, scaled), nrow = 1))))
+    }
   } else {
     design <- c(area(1, 1, 4, 1),   # y title
                 area(1, 2, 2, 3),   # legend, tag A
@@ -524,21 +730,53 @@ build_figure <- function(keys, legend_title, show_daily, show_bands,
                     wrap_elements(full = scaled(panel_b))),
                panels)
   }
-  wrap_plots(plots, design = design, widths = c(0.12, rep(1, 5)),
-             heights = rep(1, 4))
+  # The y title keeps the same share of the width whatever the column grid, and the
+  # comparator row is twice a map row's height so A, C and D-F come out a similar size.
+  wrap_plots(plots, design = design,
+             widths = c(0.12 * w, rep(1, last_col - 1L)),
+             heights = if (atn_comparators) c(rep(1, 4), 2, 2) else
+                       if (comparators) c(rep(1, 4), 2) else rep(1, 4))
 }
 
-# The antimalarial's decay form goes in the file name: the two forms give
-# two versions of this figure and they must not be told apart by their
-# folder alone. A run built before the parameter existed used the
-# exponential.
-decay_form <- if (is.null(settings$atn_decay_form)) "exp" else settings$atn_decay_form
+# BOTH forms go in the file name, as <drug>drug_<ret>ret -- scdrug_scret, scdrug_expret,
+# expdrug_expret (user, 2026-10-26). The antimalarial's decay form alone is not enough:
+# since v4 the net RETENTION can be smooth-compact too, and a run with both would otherwise
+# carry exactly the same name as one with smooth-compact decay and exponential retention,
+# told apart only by its folder -- too easy to confuse once the files are out of it. A run
+# built before either parameter existed used the exponential.
+short_form <- function(x) if (is.null(x) || identical(x, "exp")) "exp" else
+  if (identical(x, "smoothcompact")) "sc" else x
+form_tag <- paste0(short_form(settings$atn_decay_form), "drug_",
+                   short_form(settings$retention_form), "ret")
 
-save_figure <- function(fig, name) {
-  stem <- file.path(out_dir, paste0(name, "_", decay_form))
-  ggsave(paste0(stem, ".png"), fig, width = 13, height = 9, dpi = 300,
+# A figure drawn from a run that is still filling in says so in its name, as _n<used>, so a
+# draft is never mistaken for the final version once it is out of this folder (user,
+# 2026-10-26). Nothing is appended when every realisation the run holds was used, so the
+# finished figures keep clean names.
+# Counted from the CACHE, not from the sweep files on disk. Those two disagree whenever a
+# run finishes between one build and the next: the cache is only re-read when the folders,
+# the cycle or "refresh" change, so on 2026-10-26 a figure drawn from 152 cached
+# realisations was named as though it held all 160, which is the marker asserting exactly
+# the thing it exists to deny. What the figure is drawn from is what its name must report.
+local({
+  v <- cached$values
+  in_cache <- unique(v$draw[v$region != country])
+  nine <- table(v$draw[v$region != country & v$arm == "none"])
+  used <- as.integer(names(nine)[nine == length(geo_grid$region)])
+  if (length(used) < length(in_cache)) {
+    form_tag <<- paste0(form_tag, "_n", length(used))
+    message(sprintf("PARTIAL run: %d of %d realisation(s) in the cache are complete in all ",
+                    length(used), length(in_cache)),
+            sprintf("%d regions; the file names carry _n%d.",
+                    length(geo_grid$region), length(used)))
+  }
+})
+
+save_figure <- function(fig, name, height = 9) {
+  stem <- file.path(out_dir, paste0(name, "_", form_tag))
+  ggsave(paste0(stem, ".png"), fig, width = 13, height = height, dpi = 300,
          device = ragg::agg_png, bg = "white")
-  ggsave(paste0(stem, ".pdf"), fig, width = 13, height = 9,
+  ggsave(paste0(stem, ".pdf"), fig, width = 13, height = height,
          device = grDevices::cairo_pdf)
   message("Saved: ", stem, ".(png|pdf)")
 }
@@ -553,11 +791,11 @@ save_figure(build_figure(c(band_arms, "shared"), NULL,
             "fig5_bands")
 save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
                          show_bands = FALSE, national = TRUE),
-            "fig5_national_medians")
+            "fig5_natmed")
 save_figure(build_figure(c(band_arms, "shared"), NULL,
                          show_daily = FALSE, show_bands = TRUE,
                          national = TRUE),
-            "fig5_national_bands")
+            "fig5_natbands")
 # The medians figure, but with the national inset banded: the regions by
 # their medians, all seven arms, and the country with its 95% intervals
 # as well. The inset keeps five of the arms, the four the banded figure
@@ -568,7 +806,7 @@ save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
                          show_bands = FALSE, national = TRUE,
                          nat_bands = TRUE,
                          nat_keys = c("none", band_arms, "shared")),
-            "fig5_national_medians_bandinset")
+            "fig5_natmed_bandinset")
 # The same again without Pyr-CFP-ATN in the inset, whose band runs under
 # the others for the whole period.
 save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
@@ -577,4 +815,50 @@ save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
                          nat_keys = c("none",
                                       setdiff(band_arms, "pyr_cfp_atn"),
                                       "shared")),
-            "fig5_national_medians_bandinset_v2")
+            "fig5_natmed_bandinset_v2")
+
+# The same again with the comparator row: A-C as before, plus D-F giving cases averted
+# against pyrethroid-only, pyrethroid-PBO and pyrethroid-CFP nets rather than against no
+# future nets. Saved as its own figure so the six above are unchanged.
+save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
+                         show_bands = FALSE, national = TRUE,
+                         comparators = TRUE),
+            "fig5_natmed_vscomp", height = 13.5)
+
+# The same layout with panel A showing its 95% intervals rather than medians alone, as the
+# bandinset figures do: the country has room for bands where nine small panels do not.
+save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
+                         show_bands = FALSE, national = TRUE, comparators = TRUE,
+                         nat_bands = TRUE,
+                         nat_keys = c("none",
+                                      setdiff(band_arms, "pyr_cfp_atn"),
+                                      "shared")),
+            "fig5_natband_vscomp", height = 13.5)
+
+# A-I: the same again with a sixth row, G-I, giving cases averted against each of the three
+# ATN arms. Saved separately so the A-F figures above are unchanged. Taller by one 2-unit
+# row, so 18 inches against 13.5.
+save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
+                         show_bands = FALSE, national = TRUE,
+                         comparators = TRUE, atn_comparators = TRUE),
+            "fig5_natmed_vsall", height = 18)
+save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
+                         show_bands = FALSE, national = TRUE,
+                         comparators = TRUE, atn_comparators = TRUE,
+                         nat_bands = TRUE,
+                         nat_keys = c("none",
+                                      setdiff(band_arms, "pyr_cfp_atn"),
+                                      "shared")),
+            "fig5_natband_vsall", height = 18)
+for (nm in names(atn_cmp)) {
+  a <- atn_averted[[nm]]
+  message(sprintf("  vs %-16s %s", atn_cmp[[nm]],
+                  paste(sprintf("%s %+.0f [%+.0f, %+.0f]", a$arm, a$median, a$lower, a$upper),
+                        collapse = " | ")))
+}
+for (nm in names(extra_cmp)) {
+  a <- extra_averted[[nm]]
+  message(sprintf("  vs %-16s %s", extra_cmp[[nm]],
+                  paste(sprintf("%s %+.0f [%+.0f, %+.0f]", a$arm, a$median, a$lower, a$upper),
+                        collapse = " | ")))
+}

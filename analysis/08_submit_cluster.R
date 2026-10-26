@@ -239,11 +239,12 @@ new_batch <- function(settings = character(), regions = NULL) {
 # ---------------------------------------------------------------------
 # What every job runs on its node: 07 from the frozen code, in a fresh R process
 # whose output goes to a log in the results folder. run_env and script are the
-# batch's; stage, region, realisations, cores and log_file are the job's.
+# batch's; stage, region, realisations, cores, port and log_file are the job's.
 CLUSTER_TASK <- quote({
   Sys.unsetenv(c("ATN_FORK_PATH", "SWEEP_REGIONS", "DRAW_ROWS", "STOP_BY"))
   do.call(Sys.setenv, as.list(run_env))
   Sys.setenv(STAGE = stage, SWEEP_CORES = as.character(cores),
+             R_PARALLEL_PORT = as.character(port),
              R_LIBS = paste(.libPaths(), collapse = ";"))
   if (nzchar(region)) Sys.setenv(SWEEP_REGIONS = region)
   if (nzchar(realisations)) Sys.setenv(DRAW_ROWS = realisations)
@@ -258,6 +259,15 @@ CLUSTER_TASK <- quote({
 })
 
 submissions_file <- function(out_dir) file.path(out_dir, "submissions.rds")
+
+# rbind that tolerates a column one side has not got, so a submissions.rds written before
+# a column existed (port, say) still takes new rows. Missing values become NA.
+rbind_fill <- function(old, new) {
+  if (is.null(old) || !nrow(old)) return(new)
+  for (nm in setdiff(names(new), names(old))) old[[nm]] <- NA
+  for (nm in setdiff(names(old), names(new))) new[[nm]] <- NA
+  rbind(old, new[names(old)])
+}
 
 read_submissions <- function(out_dir) {
   f <- submissions_file(out_dir)
@@ -278,10 +288,33 @@ log_path <- function(b, stage, region = "", realisations = "") {
 # someone else wants the nodes, which is exactly when we should give way (user, 2026-10-19).
 JOB_PRIORITY <- Sys.getenv("HIPERCOW_PRIORITY", "low")
 
+# A port of its own for every job (2026-10-26). 07 runs its realisations in a local PSOCK
+# pool, whose workers are reached over a socket on the node. Left to itself R picks that
+# port at random from 11000-11999 and simply claims it, which was safe while a job had a
+# whole node, but small jobs share nodes: two of ours drew 11365 together and the loser
+# died in 10 s with "cannot open the connection". Handing each job a distinct port makes
+# that impossible rather than merely unlikely. R reads R_PARALLEL_PORT when parallel loads
+# (verified), so this needs no change to 07 and leaves its code_md5 -- and therefore every
+# results folder written under the old numbering -- untouched. The range sits above the old
+# random window and below Windows' ephemeral range (49152+), and the counter persists so
+# that jobs submitted by separate drivers cannot land on the same number either.
+PORT_LO <- 20000L; PORT_HI <- 45000L
+PORT_COUNTER <- Sys.getenv("ATNET_PORT_COUNTER",
+                           file.path("outputs", "projections", ".parallel_port_counter"))
+next_ports <- function(n) {
+  dir.create(dirname(PORT_COUNTER), recursive = TRUE, showWarnings = FALSE)
+  i <- if (file.exists(PORT_COUNTER))
+    suppressWarnings(as.integer(readLines(PORT_COUNTER, warn = FALSE)[1])) else 0L
+  if (!length(i) || is.na(i)) i <- 0L
+  writeLines(as.character(i + n), PORT_COUNTER)
+  PORT_LO + (i + seq_len(n) - 1L) %% (PORT_HI - PORT_LO)
+}
+
 submit_tasks <- function(b, tasks, name, max_runtime_h = NULL) {
   run_env <- c(b$settings, ATNET_CODE_DIR = b$snapshot, ATNET_VERSION = b$atnet_version)
   script  <- file.path(b$snapshot, "analysis", "07_run_projections.R")
   dir.create(b$out_dir, recursive = TRUE, showWarnings = FALSE)
+  tasks$port <- next_ports(nrow(tasks))
   nodes <- usable_nodes()
   if (!is.null(nodes)) message("Keeping work off: ", toString(EXCLUDE_NODES))
   for (k in unique(tasks$cores)) {
@@ -293,7 +326,7 @@ submit_tasks <- function(b, tasks, name, max_runtime_h = NULL) {
         max_runtime = .(if (is.null(max_runtime_h)) NULL else as.integer(max_runtime_h * 60))))))
     rec <- cbind(task = bundle$ids, bundle = bundle$name, data, submitted = Sys.time(),
                  snapshot = b$snapshot, atnet_version = b$atnet_version, stringsAsFactors = FALSE)
-    saveRDS(rbind(read_submissions(b$out_dir), rec), submissions_file(b$out_dir))
+    saveRDS(rbind_fill(read_submissions(b$out_dir), rec), submissions_file(b$out_dir))
     message(sprintf("Submitted %d job(s) of %d core(s) as bundle %s", nrow(data), k, bundle$name))
   }
   invisible(read_submissions(b$out_dir))

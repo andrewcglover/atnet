@@ -67,11 +67,13 @@ a_x_max      <- 6     # panel A is drawn and tick-marked only this far
 # axis that stopped labelling at 6 while the panel ran to 4 would read as a
 # truncation artefact.
 b_y_lo     <- 4
-b_y_cap    <- 16
-b_y_breaks <- seq(4, 16, by = 2)
+b_y_cap    <- 18
+b_y_breaks <- seq(4, 18, by = 2)
 b_arrow_y  <- 4.5     # between the 4 and 5 gridlines, clear of every interval
 
 ribbon_alpha <- 0.3
+pt_alpha     <- 0.55   # empirical points, every panel
+bar_alpha    <- 0.35   # their intervals; both stay above ribbon_alpha
 pt_size      <- 2.0   # panel A's size, now used in both
 bar_width    <- 0.22
 
@@ -189,6 +191,263 @@ arrow_layers <- function(x_lo, x_hi, y, gap = 0.4, label_x = 3,
   )
 }
 
+# The EIP panel, lifted out of build_figure so both layouts draw the same one.
+eip_panel <- function(x_lo, x_hi, show_range = FALSE) {
+  trim_b <- function(df) df[df$x >= x_lo & df$x <= x_hi, , drop = FALSE]
+  draw_range <- show_range && has_range
+  range_atn  <- if (draw_range) trim_b(eip$pred_range)     else NULL
+  range_base <- if (draw_range) trim_b(eip$baseline_range) else NULL
+
+  p_b <- ggplot(trim_b(eip_cri), aes(x = x)) +
+    geom_ribbon(data = trim_b(eip_baseline),
+                aes(x = x, ymin = lower, ymax = upper),
+                fill = baseline_fill, alpha = ribbon_alpha,
+                inherit.aes = FALSE) +
+    geom_line(data = trim_b(eip_baseline), aes(x = x, y = median),
+              colour = baseline_colour, linewidth = 0.8, inherit.aes = FALSE) +
+    geom_ribbon(aes(ymin = lower, ymax = upper),
+                fill = atn_fill, alpha = ribbon_alpha) +
+    geom_line(aes(y = median), colour = atn_colour, linewidth = 0.8)
+
+  if (draw_range) {
+    p_b <- p_b +
+      geom_line(data = range_base, aes(x = x, y = value, group = bound),
+                colour = baseline_colour, linetype = range_lty,
+                linewidth = range_lwd, inherit.aes = FALSE) +
+      geom_line(data = range_atn, aes(x = x, y = value, group = bound),
+                colour = atn_colour, linetype = range_lty,
+                linewidth = range_lwd, inherit.aes = FALSE)
+  }
+
+  p_b <- p_b +
+    geom_errorbar(
+      data = trim_b(overlay_b),
+      aes(x = x, ymin = eip_lo, ymax = eip_hi, colour = arm),
+      width = bar_width, alpha = bar_alpha, linewidth = 0.4, inherit.aes = FALSE
+    ) +
+    geom_point(
+      data = trim_b(overlay_b),
+      aes(x = x, y = mean_eip, colour = arm, shape = dpi),
+      size = pt_size, alpha = pt_alpha, stroke = 0.8, inherit.aes = FALSE
+    ) +
+    arrow_layers(x_lo, x_hi, y = b_arrow_y) +
+    scale_colour_manual(values = net_line, guide = "none") +
+    scale_shape_manual(values = dpi_shapes, drop = FALSE,
+                       guide = "none") +
+    scale_x_continuous(breaks       = seq(x_lo, x_hi, by = 2),
+                       minor_breaks = seq(x_lo, x_hi, by = 1)) +
+    scale_y_continuous(breaks       = b_y_breaks,
+                       labels       = c(head(b_y_breaks, -1),
+                                        paste0(">", b_y_cap)),
+                       minor_breaks = seq(b_y_lo, b_y_cap, by = 1)) +
+    coord_cartesian(xlim = c(x_lo, x_hi), ylim = c(b_y_lo, b_y_cap),
+                    clip = "on") +
+    labs(x = "Time of exposure relative to infection (days)",
+         y = "EIP (days)") +
+    theme_minimal(base_size = 11) +
+    theme(legend.position = "none",
+          plot.margin     = margin(t = 4, r = 6, b = 4, l = 6))
+
+  p_b
+}
+
+# ==== Alternative layout: activity split by setting =========================
+# Panel A of the figure above carries all three blocking curves at once, which
+# is the busiest thing in it -- three ribbons at alpha 0.3 overlapping through
+# the -2 to +2 window, where the lab-TBA / field-TBA distinction is the one a
+# reader is most likely to miss. Here the setting splits into two rows and
+# colour carries only TRA against TBA, so each row holds two curves.
+#
+# THE TRA CURVE IS THE SAME IN BOTH ROWS. Field TRA is assumed equal to lab TRA
+# -- that is the invariance assumption -- so drawing it twice turns the Bompard
+# map from an assertion into something visible: the blue curve does not move,
+# and the whole lab-to-field difference is the change in its gap to the red one.
+# The caption has to say so, or it reads as two separate estimates.
+#
+# Points are drawn in the LABORATORY row only. They are the same assay data; a
+# second copy under the field row would assert a measurement that does not
+# exist, which is why field TBA carries no overlay in the other layout either.
+split_cols   <- c(TRA = "#2255AA",   # sapphire
+                  TBA = "#993366")   # maroon
+split_labels <- c(TRA = "Transmission-reducing activity",
+                  TBA = "Transmission-blocking activity")
+split_heights <- c(0.27, 0.27, 0.46)
+rate_x_lim    <- c(-2, 10)
+
+# The relative-rate inset's left edge. The data span x_lo..x_hi maps into the panel
+# with ggplot's 5% expansion either side, so a data value xv sits at
+# 0.0476 + (xv - x_lo)/(x_hi - x_lo) * 0.9048. The box is placed clear of grid_end --
+# where the field row's hand-drawn gridlines stop -- rather than of a_x_max itself:
+# the gridlines run 0.6 d past the cut, so keying off a_x_max put the border inside
+# them (user, 2026-10-27).
+inset_left_of <- function(x_lo, x_hi) {
+  grid_end <- a_x_max + 0.05 * (a_x_max - x_lo)
+  0.0476 + (grid_end - x_lo) / (x_hi - x_lo) * 0.9048 + 0.03
+}
+
+# One row of activity curves. with_legend adds the figure's whole legend --
+# Activity, Netting and Dissection day -- built as in the other layout, from
+# dummy layers parked below the y range and clipped away, so the keys inherit
+# the real ribbon and line styling rather than needing override.aes.
+activity_panel <- function(df, ov, x_lo, x_hi, ylab, with_legend, ref = NULL) {
+  grid_end <- a_x_max + 0.05 * (a_x_max - x_lo)
+  p <- ggplot(df, aes(x = x)) +
+    annotate("segment", x = -Inf, xend = grid_end,
+             y = seq(0, 100, 25), yend = seq(0, 100, 25),
+             colour = "grey92", linewidth = 0.5) +
+    annotate("segment", x = -Inf, xend = grid_end,
+             y = seq(12.5, 87.5, 25), yend = seq(12.5, 87.5, 25),
+             colour = "grey92", linewidth = 0.25) +
+    geom_ribbon(aes(ymin = lower, ymax = upper, fill = act),
+                alpha = ribbon_alpha, colour = NA) +
+    geom_line(aes(y = median, colour = act), linewidth = 0.8)
+  # The OTHER setting's TBA median, dashed: the laboratory row carries the field
+  # curve and the field row the laboratory one, so the lab-to-field shift can be read
+  # off either panel without holding the other in mind (user, 2026-10-27). One dash
+  # pattern and width, as in panel D -- dash length in grid scales with linewidth, so
+  # the same pattern drawn thinner comes out looking dotted.
+  if (!is.null(ref) && nrow(ref)) {
+    p <- p + geom_line(data = ref, aes(x = x, y = median),
+                       colour = split_cols[["TBA"]], linetype = range_lty,
+                       linewidth = range_lwd, inherit.aes = FALSE)
+  }
+  if (!is.null(ov) && nrow(ov)) {
+    p <- p +
+      geom_errorbar(data = ov,
+                    aes(x = x, ymin = 100 * b_lo, ymax = 100 * b_hi, colour = act),
+                    width = bar_width, alpha = bar_alpha, linewidth = 0.4,
+                    inherit.aes = FALSE, show.legend = FALSE) +
+      geom_point(data = ov,
+                 aes(x = x, y = 100 * b_est, colour = act, shape = dpi),
+                 size = pt_size, alpha = pt_alpha, stroke = NA,
+                 inherit.aes = FALSE, show.legend = FALSE)
+  }
+  act_guide <- if (with_legend) guide_legend(order = 1) else "none"
+  p <- p +
+    scale_colour_manual(values = split_cols, breaks = names(split_cols),
+                        labels = split_labels, name = "Activity",
+                        guide = act_guide) +
+    scale_fill_manual(values = split_cols, breaks = names(split_cols),
+                      labels = split_labels, name = "Activity",
+                      guide = act_guide)
+  if (with_legend) {
+    dummy_net <- data.frame(
+      x    = rep(c(x_lo, x_lo + 0.01), times = 2),
+      y    = -20, ymin = -21, ymax = -19,
+      net  = factor(rep(arm_breaks, each = 2), levels = arm_breaks))
+    dummy_dpi <- data.frame(x = x_lo, y = -20,
+                            dpi = factor(dpi_levels, levels = dpi_levels))
+    p <- p +
+      new_scale_colour() + new_scale_fill() +
+      geom_ribbon(data = dummy_net,
+                  aes(x = x, ymin = ymin, ymax = ymax, fill = net),
+                  alpha = ribbon_alpha, colour = NA, inherit.aes = FALSE) +
+      geom_line(data = dummy_net, aes(x = x, y = y, colour = net),
+                linewidth = 0.8, inherit.aes = FALSE) +
+      scale_colour_manual(values = net_line, breaks = arm_breaks,
+                          labels = arm_labels, name = "Netting",
+                          guide = guide_legend(order = 2)) +
+      scale_fill_manual(values = net_fill, breaks = arm_breaks,
+                        labels = arm_labels, name = "Netting",
+                        guide = guide_legend(order = 2)) +
+      geom_point(data = dummy_dpi, aes(x = x, y = y, shape = dpi),
+                 colour = "grey30", size = pt_size, alpha = pt_alpha,
+                 inherit.aes = FALSE) +
+      scale_shape_manual(values = dpi_shapes, breaks = dpi_levels,
+                         drop = FALSE, name = "Dissection day",
+                         guide = guide_legend(order = 3))
+  } else {
+    p <- p + scale_shape_manual(values = dpi_shapes, drop = FALSE, guide = "none")
+  }
+  p +
+    scale_x_continuous(breaks       = seq(x_lo, a_x_max, by = 2),
+                       minor_breaks = seq(x_lo, a_x_max, by = 1)) +
+    scale_y_continuous(breaks       = seq(0, 100, 25),
+                       minor_breaks = seq(0, 100, 12.5)) +
+    coord_cartesian(xlim = c(x_lo, x_hi), ylim = c(0, 100), clip = "on") +
+    labs(x = NULL, y = ylab) +
+    theme_minimal(base_size = 11) +
+    theme(
+      axis.text.x            = element_blank(),
+      axis.title.x           = element_blank(),
+      panel.grid.major.y     = element_blank(),
+      panel.grid.minor.y     = element_blank(),
+      plot.margin            = margin(t = 6, r = 6, b = 2, l = 6),
+      legend.position        = if (with_legend) "inside" else "none",
+      legend.position.inside = c(0.995, 0.5),
+      legend.justification.inside = c(1, 0.5),
+      legend.background      = element_blank(),
+      legend.key             = element_blank(),
+      legend.title           = element_text(size = 10, face = "bold"),
+      legend.text            = element_text(size = 9),
+      legend.margin          = margin(0, 0, 0, 0),
+      legend.spacing.y       = unit(3, "pt"),
+      legend.key.size        = unit(11, "pt")
+    )
+}
+
+# rho(s)/rho against time since NET CONTACT -- a DIFFERENT x from every other
+# panel here, which run against time of exposure relative to infection. It is
+# boxed, in the border style fig 5 uses, and carries its own axis titles, so it
+# reads as a panel in its own right rather than a fourth view of the shared
+# axis. The fill is white, not NA, so the host panel's gridlines do not show
+# through it.
+rate_panel <- function() {
+  d     <- eip$rate_cri
+  y_lim <- if (is.null(eip$rate_y_lim)) c(0, 1) else eip$rate_y_lim
+  ggplot(d, aes(x = s)) +
+    annotate("segment", x = min(d$s), xend = max(d$s), y = 1, yend = 1,
+             colour = baseline_colour, linewidth = 0.7) +
+    geom_ribbon(aes(ymin = lower, ymax = upper), fill = atn_fill,
+                alpha = ribbon_alpha, colour = NA) +
+    geom_line(aes(y = median), colour = atn_colour, linewidth = 0.7) +
+    scale_x_continuous(breaks       = seq(rate_x_lim[1], rate_x_lim[2], by = 2),
+                       minor_breaks = seq(rate_x_lim[1], rate_x_lim[2], by = 1)) +
+    scale_y_continuous(breaks       = seq(0, 1, by = 0.25),
+                       minor_breaks = seq(0, 1, by = 0.125)) +
+    coord_cartesian(xlim = rate_x_lim, ylim = y_lim, clip = "on") +
+    labs(x = "Days since net contact", y = "Relative EIP\nprogression rate") +
+    theme_minimal(base_size = 9) +
+    theme(axis.title      = element_text(size = 8.5),
+          axis.text       = element_text(size = 8),
+          plot.background = element_rect(colour = "grey40", fill = "white",
+                                         linewidth = 0.4),
+          plot.margin     = margin(t = 5, r = 7, b = 4, l = 4))
+}
+
+build_figure_split <- function(x_lo, x_hi, show_range = FALSE) {
+  trim_a <- function(df) df[df$x >= x_lo & df$x <= a_x_max, , drop = FALSE]
+  as_act <- function(d) {
+    d$act <- factor(ifelse(grepl("TRA", as.character(d$panel)), "TRA", "TBA"),
+                    levels = c("TRA", "TBA"))
+    d
+  }
+  cur <- function(keep) {
+    as_act(trim_a(curves[as.character(curves$panel) %in% keep, , drop = FALSE]))
+  }
+  tba_of <- function(nm) trim_a(curves[as.character(curves$panel) == nm, , drop = FALSE])
+  p_lab <- activity_panel(cur(c("Lab TRA", "Lab TBA")),
+                          as_act(trim_a(overlay_a)), x_lo, x_hi,
+                          "Laboratory activity (%)", with_legend = TRUE,
+                          ref = tba_of("Field TBA")) +
+    labs(tag = "A")
+  p_fld <- activity_panel(cur(c("Lab TRA", "Field TBA")), NULL, x_lo, x_hi,
+                          "Field activity (%)", with_legend = FALSE,
+                          ref = tba_of("Lab TBA")) +
+    labs(tag = "B")
+  p_eip <- eip_panel(x_lo, x_hi, show_range) + labs(tag = "D")
+
+  p_fld_inset <- p_fld +
+    patchwork::inset_element(rate_panel() + labs(tag = "C"),
+                             left   = inset_left_of(x_lo, x_hi),
+                             bottom = 0.045, right = 0.99, top = 0.965,
+                             align_to = "panel")
+
+  (p_lab / p_fld_inset / p_eip) +
+    plot_layout(heights = split_heights) &
+    theme(plot.tag = element_text(face = "bold", size = 13))
+}
+
 build_figure <- function(x_lo, x_hi, show_range = FALSE) {
 
   trim_a <- function(df) df[df$x >= x_lo & df$x <= a_x_max, , drop = FALSE]
@@ -228,13 +487,13 @@ build_figure <- function(x_lo, x_hi, show_range = FALSE) {
     geom_errorbar(
       data = trim_a(overlay_a),
       aes(x = x, ymin = 100 * b_lo, ymax = 100 * b_hi, colour = panel),
-      width = bar_width, alpha = 0.5, linewidth = 0.4,
+      width = bar_width, alpha = bar_alpha, linewidth = 0.4,
       inherit.aes = FALSE, show.legend = FALSE
     ) +
     geom_point(
       data = trim_a(overlay_a),
       aes(x = x, y = 100 * b_est, colour = panel, shape = dpi),
-      size = pt_size, alpha = 0.85, stroke = NA,
+      size = pt_size, alpha = pt_alpha, stroke = NA,
       inherit.aes = FALSE, show.legend = FALSE
     ) +
     # Breaks and labels must match on both scales or the legend splits in two.
@@ -257,7 +516,7 @@ build_figure <- function(x_lo, x_hi, show_range = FALSE) {
                       labels = arm_labels, name = "Netting",
                       guide = guide_legend(order = 2)) +
     geom_point(data = dummy_dpi, aes(x = x, y = y, shape = dpi),
-               colour = "grey30", size = pt_size, alpha = 0.85,
+               colour = "grey30", size = pt_size, alpha = pt_alpha,
                inherit.aes = FALSE) +
     scale_shape_manual(values = dpi_shapes, breaks = dpi_levels,
                        drop = FALSE, name = "Dissection day",
@@ -290,59 +549,7 @@ build_figure <- function(x_lo, x_hi, show_range = FALSE) {
     )
 
   # ---- B -------------------------------------------------------------------
-  draw_range <- show_range && has_range
-  range_atn  <- if (draw_range) trim_b(eip$pred_range)     else NULL
-  range_base <- if (draw_range) trim_b(eip$baseline_range) else NULL
-
-  p_b <- ggplot(trim_b(eip_cri), aes(x = x)) +
-    geom_ribbon(data = trim_b(eip_baseline),
-                aes(x = x, ymin = lower, ymax = upper),
-                fill = baseline_fill, alpha = ribbon_alpha,
-                inherit.aes = FALSE) +
-    geom_line(data = trim_b(eip_baseline), aes(x = x, y = median),
-              colour = baseline_colour, linewidth = 0.8, inherit.aes = FALSE) +
-    geom_ribbon(aes(ymin = lower, ymax = upper),
-                fill = atn_fill, alpha = ribbon_alpha) +
-    geom_line(aes(y = median), colour = atn_colour, linewidth = 0.8)
-
-  if (draw_range) {
-    p_b <- p_b +
-      geom_line(data = range_base, aes(x = x, y = value, group = bound),
-                colour = baseline_colour, linetype = range_lty,
-                linewidth = range_lwd, inherit.aes = FALSE) +
-      geom_line(data = range_atn, aes(x = x, y = value, group = bound),
-                colour = atn_colour, linetype = range_lty,
-                linewidth = range_lwd, inherit.aes = FALSE)
-  }
-
-  p_b <- p_b +
-    geom_errorbar(
-      data = trim_b(overlay_b),
-      aes(x = x, ymin = eip_lo, ymax = eip_hi, colour = arm),
-      width = bar_width, alpha = 0.4, linewidth = 0.4, inherit.aes = FALSE
-    ) +
-    geom_point(
-      data = trim_b(overlay_b),
-      aes(x = x, y = mean_eip, colour = arm, shape = dpi),
-      size = pt_size, alpha = 0.65, stroke = 0.8, inherit.aes = FALSE
-    ) +
-    arrow_layers(x_lo, x_hi, y = b_arrow_y) +
-    scale_colour_manual(values = net_line, guide = "none") +
-    scale_shape_manual(values = dpi_shapes, drop = FALSE,
-                       guide = "none") +
-    scale_x_continuous(breaks       = seq(x_lo, x_hi, by = 2),
-                       minor_breaks = seq(x_lo, x_hi, by = 1)) +
-    scale_y_continuous(breaks       = b_y_breaks,
-                       labels       = c(head(b_y_breaks, -1),
-                                        paste0(">", b_y_cap)),
-                       minor_breaks = seq(b_y_lo, b_y_cap, by = 1)) +
-    coord_cartesian(xlim = c(x_lo, x_hi), ylim = c(b_y_lo, b_y_cap),
-                    clip = "on") +
-    labs(x = "Time of exposure relative to infection (days)",
-         y = "EIP (days)") +
-    theme_minimal(base_size = 11) +
-    theme(legend.position = "none",
-          plot.margin     = margin(t = 4, r = 6, b = 4, l = 6))
+  p_b <- eip_panel(x_lo, x_hi, show_range)
 
   (p_a / p_b) +
     plot_layout(heights = c(0.45, 0.55)) +
@@ -366,6 +573,20 @@ for (v in variants) {
                                     rng[1], rng[2], v$suffix))
   ggsave(out, p, width = 8, height = 8, dpi = 400, bg = "white")
   cat("wrote ", out, "\n", sep = "")
+}
+
+# The alternative layout, written beside the one above rather than in place of it.
+if (!is.null(eip$rate_cri)) {
+  for (v in variants) {
+    p   <- build_figure_split(rng[1], rng[2], show_range = v$range)
+    out <- file.path(out_dir, sprintf("fig_kernels_split_x%g_%g%s.png",
+                                      rng[1], rng[2], v$suffix))
+    ggsave(out, p, width = 8, height = 9.5, dpi = 400, bg = "white")
+    cat("wrote ", out, "\n", sep = "")
+  }
+} else {
+  cat("No rate_cri in the EIP plot data: re-run analysis/04_plot_eip_posteriors.R",
+      " for the split layout.\n", sep = "")
 }
 
 cat(sprintf("\nPoint jitter, both panels: uniform +-%.2f days.\n", 0.3 / 2))

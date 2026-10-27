@@ -912,24 +912,6 @@ process_model <- function(spec, n_draws_to_plot = 100,
   ggsave(out_path("cri_with_data"),   p_cri_data,
          width = 8, height = 5, dpi = 200, bg = "white")
 
-  # ---- Plot-ready frames, for figures that reuse this panel ---------------
-  # Saved rather than recomputed: E[T] costs a quadrature per (draw, x), so a
-  # figure that rebuilt these would take minutes and could drift from the panel
-  # published here. Read with readRDS(); see analysis/14_plot_fig_kernels.R.
-  saveRDS(list(cri          = df_cri,
-               baseline_cri = df_baseline_cri,
-               overlay      = data_overlay,
-               pred_range     = df_pred_range,      # predictive 95% of mosquitoes
-               draw_range     = df_draw_range,      # per-draw version + its CrI
-               baseline_range = df_baseline_range,  # the same for the control arm
-               pct_probs      = pct$probs,
-               days         = days,
-               erlang_shape = d,
-               colours      = c(posterior = posterior_colour,
-                                baseline  = baseline_colour),
-               fit_dir      = fit_dir),
-          file.path(fig_dir, paste0(spec$model, "_plotdata.rds")))
-
   # ---- Relative EIP progression rate panels ------------------------------
   # rho(s) / rho vs time s since ATN exposure. The s_grid contains 0
   # twice in adjacent positions: the first 0 carries y = 1 (baseline,
@@ -955,6 +937,35 @@ process_model <- function(spec, n_draws_to_plot = 100,
     lower  = apply(rate_post_mat, 2, quantile, probs = 0.025),
     upper  = apply(rate_post_mat, 2, quantile, probs = 0.975)
   )
+
+  # ---- Plot-ready frames, for figures that reuse these panels -------------
+  # Saved rather than recomputed: E[T] costs a quadrature per (draw, x), so a
+  # figure that rebuilt these would take minutes and could drift from the panels
+  # published here. Read with readRDS(); see analysis/14_plot_fig_kernels.R.
+  # Written HERE rather than beside the mean-EIP panels because rate_cri is the
+  # last frame built; everything above it is already final at this point.
+  saveRDS(list(cri          = df_cri,
+               baseline_cri = df_baseline_cri,
+               overlay      = data_overlay,
+               pred_range     = df_pred_range,      # predictive 95% of mosquitoes
+               draw_range     = df_draw_range,      # per-draw version + its CrI
+               baseline_range = df_baseline_range,  # the same for the control arm
+               pct_probs      = pct$probs,
+               # rho(s)/rho against time since ATN exposure -- a DIFFERENT x from
+               # every other frame here, which are against time of exposure
+               # relative to infection. Any figure drawing it beside them has to
+               # label and separate its axis, or it reads as a fourth view of the
+               # same quantity. s_grid holds 0 twice, carrying 1 then r0_frac, so
+               # a line geom draws the drop at s = 0 by itself.
+               rate_cri     = df_rate_cri,
+               rate_s_lim   = c(rate_s_min, rate_s_max),
+               rate_y_lim   = rate_y_lim,
+               days         = days,
+               erlang_shape = d,
+               colours      = c(posterior = posterior_colour,
+                                baseline  = baseline_colour),
+               fit_dir      = fit_dir),
+          file.path(fig_dir, paste0(spec$model, "_plotdata.rds")))
 
   rate_scales <- list(
     scale_x_continuous(breaks       = rate_x_major_breaks,

@@ -73,7 +73,25 @@ refresh <- "refresh" %in% args
 # "complete" plots a run that is still filling in, over the realisations every region
 # holds. Without it a part-finished run stops in read_all_series (regions must line up).
 only_complete <- "complete" %in% args
-run_dirs <- setdiff(args, c("refresh", "complete"))
+# "boundsonly" writes ONLY the bounds figures, for iterating on their design without
+# re-rendering the ten others at 300 dpi each time. Never use it for a final set.
+only_bounds <- "boundsonly" %in% args
+# pessimistic=<dir> and optimistic=<dir> switch on the bounds version of the A-F figure.
+# Each names a folder under outputs/summaries -- a bounds run ALREADY SUMMARISED by 09 --
+# whose National lines for the three antimalarial arms are drawn beside the primary run's
+# as extra rows in C-F. The summaries are read rather than the runs themselves because the
+# National totals there come from the same national_values() call this script makes, and
+# reading them costs nothing next to a second pass over the sweep files. Only the
+# antimalarial arms are taken: the others carry no antimalarial, so the bounds cannot move
+# them, and their rows stay single.
+#   Rscript analysis/10_plot_fig5.R outputs/projections_v4/mli_hldrawn_v4_scmain \
+#     pessimistic=mli_hl2_v4_scmin optimistic=mli_hl5_v4_scmax
+bound_args <- grep("^(pessimistic|optimistic)=", args, value = TRUE)
+BOUNDS <- stats::setNames(sub("^[a-z]+=", "", bound_args), sub("=.*", "", bound_args))
+if (length(BOUNDS) == 1L) {
+  stop("Name BOTH pessimistic= and optimistic=, or neither.", call. = FALSE)
+}
+run_dirs <- setdiff(args, c("refresh", "complete", "boundsonly", bound_args))
 if (!length(run_dirs)) stop("Name at least one run folder.", call. = FALSE)
 settings <- readRDS(file.path(run_dirs[1], "settings.rds"))
 out_dir <- file.path("outputs", "figures", basename(run_dirs[1]))
@@ -509,6 +527,159 @@ averted_vs <- function(cmp) {
   a
 }
 
+# ---- the bounds version of C-F ------------------------------------------------------
+# Each antimalarial arm gains two more rows: the same quantity with the antimalarial's
+# half-life, omega and p_A all held at the ends of their 95% prior ranges rather than drawn.
+# They are NOT a wider interval round the primary -- each carries its own interval, and the
+# primary already propagates the uncertainty these two replace with a fixed assumption.
+VAR_LEV    <- c("pessimistic", "primary", "optimistic")
+VAR_LABS   <- c(pessimistic = "Minimum plausible", primary = "Primary analysis",
+                optimistic = "Maximum plausible")
+VAR_SHAPES <- c(pessimistic = 25, primary = 16, optimistic = 17)  # solid down, dot, up
+VAR_SIZES  <- c(pessimistic = 2.0, primary = 2.35, optimistic = 2.0)
+# One whisker width throughout, the bounds' simply lighter. The MARKERS stay solid: they
+# carry the median under each assumption, and a ~6 pt triangle at 45% on white washes out
+# where a long whisker at the same alpha still reads (user, 2026-10-27, after seeing both).
+VAR_ALPHA  <- c(pessimistic = 0.5, primary = 1, optimistic = 0.5)
+VAR_OFFSET <- 0.29
+atn_arm_keys <- c("atn", "pyr_atn", "pyr_cfp_atn")
+
+if (length(BOUNDS)) {
+  read_bounds <- function(dir) {
+    f <- file.path("outputs", "summaries", dir, "row_values.csv")
+    if (!file.exists(f)) {
+      stop("No summary for ", dir, ": run analysis/09_summarise_projections.R on that ",
+           "run first (it writes ", f, ").", call. = FALSE)
+    }
+    v <- utils::read.csv(f, stringsAsFactors = FALSE)
+    v <- v[v$region == "National" & v$arm %in% atn_arm_keys, , drop = FALSE]
+    if (!nrow(v)) stop("No National antimalarial lines in ", f, call. = FALSE)
+    v$region <- country          # 09 calls it "National", this script calls it the country
+    v[c("region", "draw", "arm", "clin_cases", "person_years")]
+  }
+  nat_b <- national[c("region", "draw", "arm", "clin_cases", "person_years")]
+  nat_b$variant <- "primary"
+  for (vn in names(BOUNDS)) {
+    d <- read_bounds(BOUNDS[[vn]])
+    # Contrasts are paired WITHIN a realisation, so a bounds run summarised over a
+    # different set of rows would pair the wrong simulations together.
+    if (!setequal(d$draw, national$draw)) {
+      stop(BOUNDS[[vn]], " covers ", length(unique(d$draw)), " realisation(s) against ",
+           length(unique(national$draw)), " here; summarise both over the same rows.",
+           call. = FALSE)
+    }
+    d$variant <- vn
+    nat_b <- rbind(nat_b, d)
+  }
+  nat_b$base <- nat_b$arm
+  nat_b$arm  <- ifelse(nat_b$variant == "primary", nat_b$base,
+                       paste0(nat_b$base, "__", nat_b$variant))
+  bkey <- unique(nat_b[c("arm", "base", "variant")])
+
+  averted_vs_b <- function(cmp) {
+    raw <- arm_contrasts(nat_b, comparator = cmp)
+    a   <- summarise_rows(raw, "cases_averted_per1000", digits = 0)
+    a   <- merge(a, bkey, by = "arm")
+    a   <- a[a$base %in% setdiff(arms$arm, "none"), , drop = FALSE]
+    # the comparator's contrast with itself is exactly 0; keep the row so every panel holds
+    # the same arms. Not for "none", which these panels drop.
+    if (cmp %in% setdiff(arms$arm, "none") && !cmp %in% a$arm) {
+      z <- a[1, , drop = FALSE]
+      z[] <- lapply(z, function(col) if (is.numeric(col)) 0 else col[[1]])
+      z$arm <- cmp; z$base <- cmp; z$variant <- "primary"
+      a <- rbind(a, z)
+    }
+    pb <- tapply(raw$cases_averted_per1000 > 0, raw$arm, mean)
+    a$p_better <- ifelse(a$arm == cmp, NA_real_, pb[a$arm])
+    a$label   <- factor(arms$label[match(a$base, arms$arm)], levels = levels(averted$label))
+    a$variant <- factor(a$variant, levels = VAR_LEV)
+    # y set by hand rather than by position_dodge, so a one-variant arm sits exactly on its
+    # label and a three-variant arm splits evenly, however dodge happens to count groups
+    nv <- table(a$label)[as.character(a$label)]
+    a$y <- as.integer(a$label) +
+      ifelse(nv == 1, 0, (as.integer(a$variant) - 2L) * VAR_OFFSET)
+    a
+  }
+
+  # The same panel as averted_panel(), on a continuous y so the three rows can be offset.
+  averted_panel_b <- function(a, xlab, tag, xlim = NULL, y_labels = TRUE,
+                              x_text = NULL, x_breaks = waiver(), x_minor = waiver()) {
+    lev <- levels(a$label)
+    p <- ggplot(a, aes(median, y, colour = base)) +
+      geom_vline(xintercept = 0, colour = "grey60", linewidth = 0.4) +
+      geom_linerange(aes(xmin = lower, xmax = upper, alpha = variant),
+                     linewidth = 0.85) +
+      geom_point(aes(shape = variant, size = variant, fill = base), alpha = 1) +
+      scale_colour_manual(values = key_colours, guide = "none") +
+      scale_fill_manual(values = key_colours, guide = "none") +
+      scale_shape_manual(values = VAR_SHAPES, guide = "none") +
+      scale_size_manual(values = VAR_SIZES, guide = "none") +
+      scale_alpha_manual(values = VAR_ALPHA, guide = "none") +
+      scale_y_continuous(breaks = seq_along(lev),
+                         labels = if (y_labels) lev else NULL,
+                         limits = c(0.4, length(lev) + 1.1)) +
+      scale_x_continuous(limits = if (is.null(xlim)) c(min(0, a$lower), NA) else xlim,
+                         breaks = x_breaks, minor_breaks = x_minor,
+                         expand = expansion(mult = c(0, 0.05))) +
+      labs(x = xlab, y = NULL, tag = tag)
+    if (!is.null(x_text)) {
+      # ONE line per arm, on the primary's row: the primary's probability with the two
+      # bounds in brackets. Stacking the three put them about 8 pt apart against ~7.7 pt
+      # text, so they collided, and shrinking them far enough to fit left the bounds at
+      # roughly 3 pt once the figure is reduced to a journal column (user, 2026-10-27).
+      # A single fixed-colour layer, not a colour or size aesthetic: either scale added
+      # here REPLACES the arm colour scale, and the dots and whiskers then try to read
+      # "atn" as a colour name.
+      tp <- a[a$variant == "primary", ]
+      key <- paste(a$base, a$variant)
+      lo  <- a$p_better[match(paste(tp$base, "pessimistic"), key)]
+      hi  <- a$p_better[match(paste(tp$base, "optimistic"), key)]
+      tp$shown <- ifelse(is.na(tp$p_better), "\u2013",
+                  ifelse(is.na(lo) | is.na(hi),
+                         sprintf("%.0f%%", 100 * tp$p_better),
+                         sprintf("%.0f%% (%.0f, %.0f)",
+                                 100 * tp$p_better, 100 * lo, 100 * hi)))
+      p <- p +
+        geom_text(data = tp, aes(x = x_text, y = y, label = shown), inherit.aes = FALSE,
+                  hjust = 0.5, colour = "grey20", size = 3.9) +
+        annotate("text", x = x_text, y = length(lev) + 0.85, label = "P(averts more)",
+                 size = 3.9, colour = "grey25", hjust = 0.5) +
+        coord_cartesian(clip = "off")
+    }
+    p + theme_minimal(base_size = 13) +
+      theme(panel.grid.major.y = element_blank(), panel.grid.minor.y = element_blank(),
+            axis.text.y = element_text(size = 13, colour = "black"),
+            plot.tag = element_text(size = 18, face = "bold"),
+            plot.background = element_rect(colour = "grey40", fill = NA, linewidth = 0.4),
+            plot.margin = margin(12, 12, 12, 12)) +
+      (if (is.null(x_text)) NULL else theme(axis.title.x = element_text(size = 11.6)))
+  }
+
+  # A key for the three markers alone, in neutral grey: the arm is already keyed by colour,
+  # so repeating it here would say the shapes belong to one arm.
+  shape_legend_panel <- function(scale = 0.92) {
+    d <- data.frame(v = factor(VAR_LEV, levels = VAR_LEV),
+                    x = NA_real_, y = NA_real_)
+    ggplot(d, aes(x, y, shape = v, fill = v)) +
+      geom_point(size = 3.0 * scale, colour = "grey25", na.rm = TRUE) +
+      # Reversed, so the key reads maximum, primary, minimum down the page exactly as the
+      # three markers sit in each arm's row (user, 2026-10-27). Only the KEY is reversed:
+      # VAR_LEV still drives the offsets, so reordering it would flip the panels too.
+      scale_shape_manual(values = VAR_SHAPES, labels = VAR_LABS,
+                         name = "ATN/AITN impact",
+                         guide = guide_legend(reverse = TRUE)) +
+      scale_fill_manual(values = stats::setNames(rep("grey25", 3), VAR_LEV),
+                        labels = VAR_LABS, name = "ATN/AITN impact",
+                        guide = guide_legend(reverse = TRUE)) +
+      theme_void(base_size = 13 * scale) +
+      theme(legend.position = "inside", legend.position.inside = c(0.5, 0.5),
+            legend.key.width = unit(1.3 * scale, "lines"),
+            legend.key.height = unit(1.25 * scale, "lines"),
+            legend.text = element_text(size = 13 * scale),
+            legend.title = element_text(size = 13 * scale, face = "bold"))
+  }
+}
+
 averted_panel <- function(a, xlab, tag, xlim = NULL, y_labels = TRUE,
                           x_text = NULL, x_breaks = waiver(), x_minor = waiver()) {
   # The probability column is drawn INSIDE the panel at a fixed x rather than on a secondary
@@ -603,6 +774,41 @@ extra_panels <- Map(function(nm, tag) {
                 x_breaks = extra_breaks, x_minor = extra_minor)
 }, names(extra_cmp), c("D", "E", "F"))
 
+# The same two, with the bounds rows. Built only when the bounds folders were named.
+if (length(BOUNDS)) {
+  panel_b_b <- averted_panel_b(averted_vs_b("none"),
+    "Annual clinical cases averted per\n1,000 people vs no future nets", "B",
+    x_breaks = seq(0, 800, by = 200), x_minor = seq(0, 900, by = 50))
+  # D-F's own data region, narrower than the one the figures without the bounds use
+  # (user, 2026-10-27). Their own, not a change to extra_xlim: that is shared with those
+  # figures, and this must leave them exactly as they were. Shape is the same -- data
+  # region, then a clear strip of ticks holding the probability column.
+  bounds_xlim   <- c(-450, 1150)
+  bounds_breaks <- seq(-400, 600, by = 200)
+  bounds_minor  <- seq(-450, 600, by = 50)
+  bounds_dat    <- lapply(stats::setNames(names(extra_cmp), names(extra_cmp)), averted_vs_b)
+  # scale_x_continuous LIMITS DROP a row rather than zoom to it, so a whisker reaching past
+  # the end would take its point with it and simply not be drawn. At the realisations this
+  # was built on the widest is -442 against -450, eight units of headroom, so say so loudly
+  # rather than let a later run lose an arm in silence.
+  local({
+    r <- range(unlist(lapply(bounds_dat, function(a) c(a$lower, a$upper))))
+    if (r[[1]] < bounds_xlim[[1]] || r[[2]] > 600) {
+      message(sprintf("NOTE: bounds contrasts span %.0f to %.0f, outside the D-F data ",
+                      r[[1]], r[[2]]),
+              sprintf("region of %.0f to 600: whatever falls outside is DROPPED, not ",
+                      bounds_xlim[[1]]),
+              "clipped. Widen bounds_xlim.")
+    }
+  })
+  extra_panels_b <- Map(function(nm, tag) {
+    averted_panel_b(bounds_dat[[nm]],
+                    sprintf("Annual cases averted per 1,000 vs %s", extra_cmp[[nm]]),
+                    tag, xlim = bounds_xlim, y_labels = FALSE, x_text = extra_xtext,
+                    x_breaks = bounds_breaks, x_minor = bounds_minor)
+  }, names(extra_cmp), c("D", "E", "F"))
+}
+
 # G-I: the same again against the three ATN arms, for the figure that carries all of them.
 # Its own x range, not D-F's: these contrasts reach -546 (Pyr-only against Pyr-CFP-ATN),
 # which D-F's -450 would drop entirely rather than truncate. Same shape though -- data
@@ -660,7 +866,13 @@ scaled <- function(p, s = 0.9) {
 # which the map leaves empty (user, 2026-10-26).
 build_figure <- function(keys, legend_title, show_daily, show_bands,
                          national = FALSE, nat_bands = show_bands,
-                         nat_keys = keys, comparators = FALSE, atn_comparators = FALSE) {
+                         nat_keys = keys, comparators = FALSE, atn_comparators = FALSE,
+                         bounds = FALSE) {
+  if (bounds && !(national && comparators)) {
+    stop("bounds = TRUE is only defined for the national A-F layout.", call. = FALSE)
+  }
+  pb <- if (bounds) panel_b_b else panel_b
+  ep <- if (bounds) extra_panels_b else extra_panels
   w <- if (comparators) 3L else 1L     # narrow columns per map column
   map_col <- function(c) (c - 1L) * w + 2L            # first narrow column of map column c
   region_areas <- do.call(c, lapply(seq_len(nrow(geo_grid)), function(i) {
@@ -683,8 +895,12 @@ build_figure <- function(keys, legend_title, show_daily, show_bands,
   if (national) {
     # With the comparator row the legend sits north of Gao and east of Kidal, the cell the
     # map leaves empty; without it, in the bottom-left cell south of Kayes as before.
+    # With the comparator row the legend sat in the north-east cell until 2026-10-27, when
+    # it moved to the one south of Kayes and west of Sikasso, next to the panels that use
+    # it rather than diagonally opposite them (user). Without that row, the bottom-left
+    # cell south of Kayes as before.
     legend_area <- if (comparators)
-      area(1, map_col(5), 1, map_col(5) + w - 1L) else area(4, 2)
+      area(4, map_col(1), 4, map_col(1) + w - 1L) else area(4, 2)
     # The y title spans the FOUR map rows, not every row: it reads PfPR2-10, which is what
     # A and B show, while C-I are cases averted and carry their own x labels. Spanning
     # n_row centred it over the comparator rows as well, so with six rows it sat beside
@@ -701,7 +917,7 @@ build_figure <- function(keys, legend_title, show_daily, show_bands,
                     wrap_elements(full = legend_panel(keys, legend_title,
                                                       show_bands, tag = NULL,
                                                       scale = if (comparators) 0.92 else 1)),
-                    wrap_elements(full = scaled(panel_b + labs(tag = "C")))),
+                    wrap_elements(full = scaled(pb + labs(tag = "C")))),
                panels)
     if (comparators) {
       # D, E, F across the bottom as ONE cell holding a row of three, not three cells of
@@ -711,7 +927,14 @@ build_figure <- function(keys, legend_title, show_daily, show_bands,
       # wrap_plots divides its own width into exact thirds, whatever sits above it.
       design <- c(design, area(5, 2, 5, last_col))
       plots <- c(plots, list(wrap_elements(full = wrap_plots(
-        lapply(extra_panels, scaled), nrow = 1))))
+        lapply(ep, scaled), nrow = 1))))
+      # The marker key goes in the cell south of Segou and east of Sikasso, which the map
+      # leaves empty (user, 2026-10-27). Appended to design and plots together, so the two
+      # stay matched position by position.
+      if (bounds) {
+        design <- c(design, area(4, map_col(3), 4, map_col(3) + w - 1L))
+        plots  <- c(plots, list(wrap_elements(full = shape_legend_panel())))
+      }
     }
     if (atn_comparators) {
       # G, H, I in a sixth row, nested the same way so their thirds match D-F's.
@@ -727,7 +950,7 @@ build_figure <- function(keys, legend_title, show_daily, show_bands,
     plots <- c(fixed,
                list(wrap_elements(full = legend_panel(keys, legend_title,
                                                       show_bands)),
-                    wrap_elements(full = scaled(panel_b))),
+                    wrap_elements(full = scaled(pb))),
                panels)
   }
   # The y title keeps the same share of the width whatever the column grid, and the
@@ -735,7 +958,8 @@ build_figure <- function(keys, legend_title, show_daily, show_bands,
   wrap_plots(plots, design = design,
              widths = c(0.12 * w, rep(1, last_col - 1L)),
              heights = if (atn_comparators) c(rep(1, 4), 2, 2) else
-                       if (comparators) c(rep(1, 4), 2) else rep(1, 4))
+                       if (comparators) c(rep(1, 4), 2) else
+                       rep(1, 4))
 }
 
 # BOTH forms go in the file name, as <drug>drug_<ret>ret -- scdrug_scret, scdrug_expret,
@@ -773,6 +997,7 @@ local({
 })
 
 save_figure <- function(fig, name, height = 9) {
+  if (only_bounds && !grepl("_bounds$", name)) return(invisible(NULL))
   stem <- file.path(out_dir, paste0(name, "_", form_tag))
   ggsave(paste0(stem, ".png"), fig, width = 13, height = height, dpi = 300,
          device = ragg::agg_png, bg = "white")
@@ -834,6 +1059,22 @@ save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
                                       setdiff(band_arms, "pyr_cfp_atn"),
                                       "shared")),
             "fig5_natband_vscomp", height = 13.5)
+
+# A-F again with the pessimistic and optimistic rows in C-F. Written only when the bounds
+# folders were named, under their own names, so every figure above is untouched.
+if (length(BOUNDS) == 2L) {
+  save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
+                           show_bands = FALSE, national = TRUE,
+                           comparators = TRUE, bounds = TRUE),
+              "fig5_natmed_vscomp_bounds", height = 13.5)
+  save_figure(build_figure(c(arms$arm, "shared"), NULL, show_daily = TRUE,
+                           show_bands = FALSE, national = TRUE, comparators = TRUE,
+                           bounds = TRUE, nat_bands = TRUE,
+                           nat_keys = c("none",
+                                        setdiff(band_arms, "pyr_cfp_atn"),
+                                        "shared")),
+              "fig5_natband_vscomp_bounds", height = 13.5)
+}
 
 # A-I: the same again with a sixth row, G-I, giving cases averted against each of the three
 # ATN arms. Saved separately so the A-F figures above are unchanged. Taller by one 2-unit

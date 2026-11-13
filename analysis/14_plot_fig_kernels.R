@@ -74,6 +74,16 @@ b_arrow_y  <- 4.5     # between the 4 and 5 gridlines, clear of every interval
 ribbon_alpha <- 0.3
 pt_alpha     <- 0.55   # empirical points, every panel
 bar_alpha    <- 0.35   # their intervals; both stay above ribbon_alpha
+
+# An OPTIONAL reference line at x = 0, the moment of infection, written as a separate
+# _v2 figure so the committed one is unchanged. Solid and a shade darker than the
+# gridlines rather than dashed: dashes already mean the other setting's TBA in the
+# activity rows and the individual-mosquito range in the EIP row, and a third meaning
+# would cost more than the line buys. Zero already carries a major gridline in every
+# panel, and the arrows along the foot of the EIP row already name the division, so
+# this is emphasis rather than new information.
+zero_col <- "grey70"
+zero_lwd <- 0.45
 pt_size      <- 2.0   # panel A's size, now used in both
 bar_width    <- 0.22
 
@@ -177,28 +187,31 @@ overlay_b$dpi <- factor(as.character(overlay_b$dpi), levels = dpi_levels)
 # either side of zero and its caption sits a fixed distance out, so the two
 # read as a matched pair even though the right arrow runs four times further.
 arrow_layers <- function(x_lo, x_hi, y, gap = 0.4, label_x = 3,
-                         text_size = 2.9) {
+                         text_size = 2.9, col = "black", text_col = col) {
   head <- arrow(length = unit(0.11, "inches"), type = "closed")
   list(
     annotate("segment", x =  gap, xend = x_hi, y = y, yend = y,
-             arrow = head, colour = "black", linewidth = 0.45),
+             arrow = head, colour = col, linewidth = 0.45),
     annotate("segment", x = -gap, xend = x_lo, y = y, yend = y,
-             arrow = head, colour = "black", linewidth = 0.45),
+             arrow = head, colour = col, linewidth = 0.45),
     annotate("text", x =  label_x, y = y, vjust = -0.55, size = text_size,
-             label = "Exposure after infection"),
+             label = "Exposure after infection", colour = text_col),
     annotate("text", x = -label_x, y = y, vjust = -0.55, size = text_size,
-             label = "Exposure before infection")
+             label = "Exposure before infection", colour = text_col)
   )
 }
 
 # The EIP panel, lifted out of build_figure so both layouts draw the same one.
-eip_panel <- function(x_lo, x_hi, show_range = FALSE) {
+eip_panel <- function(x_lo, x_hi, show_range = FALSE, zero_line = FALSE,
+                      anno_col = "black", anno_text_col = anno_col) {
   trim_b <- function(df) df[df$x >= x_lo & df$x <= x_hi, , drop = FALSE]
   draw_range <- show_range && has_range
   range_atn  <- if (draw_range) trim_b(eip$pred_range)     else NULL
   range_base <- if (draw_range) trim_b(eip$baseline_range) else NULL
 
   p_b <- ggplot(trim_b(eip_cri), aes(x = x)) +
+    (if (zero_line) geom_vline(xintercept = 0, colour = anno_col,
+                               linewidth = zero_lwd) else NULL) +
     geom_ribbon(data = trim_b(eip_baseline),
                 aes(x = x, ymin = lower, ymax = upper),
                 fill = baseline_fill, alpha = ribbon_alpha,
@@ -230,7 +243,9 @@ eip_panel <- function(x_lo, x_hi, show_range = FALSE) {
       aes(x = x, y = mean_eip, colour = arm, shape = dpi),
       size = pt_size, alpha = pt_alpha, stroke = 0.8, inherit.aes = FALSE
     ) +
-    arrow_layers(x_lo, x_hi, y = b_arrow_y) +
+    arrow_layers(x_lo, x_hi, y = b_arrow_y,
+                 gap = if (zero_line) 0 else 0.4, col = anno_col,
+                 text_col = anno_text_col) +
     scale_colour_manual(values = net_line, guide = "none") +
     scale_shape_manual(values = dpi_shapes, drop = FALSE,
                        guide = "none") +
@@ -289,7 +304,8 @@ inset_left_of <- function(x_lo, x_hi) {
 # Activity, Netting and Dissection day -- built as in the other layout, from
 # dummy layers parked below the y range and clipped away, so the keys inherit
 # the real ribbon and line styling rather than needing override.aes.
-activity_panel <- function(df, ov, x_lo, x_hi, ylab, with_legend, ref = NULL) {
+activity_panel <- function(df, ov, x_lo, x_hi, ylab, with_legend, ref = NULL,
+                           zero_line = FALSE, anno_col = "black") {
   grid_end <- a_x_max + 0.05 * (a_x_max - x_lo)
   p <- ggplot(df, aes(x = x)) +
     annotate("segment", x = -Inf, xend = grid_end,
@@ -298,6 +314,8 @@ activity_panel <- function(df, ov, x_lo, x_hi, ylab, with_legend, ref = NULL) {
     annotate("segment", x = -Inf, xend = grid_end,
              y = seq(12.5, 87.5, 25), yend = seq(12.5, 87.5, 25),
              colour = "grey92", linewidth = 0.25) +
+    (if (zero_line) geom_vline(xintercept = 0, colour = anno_col,
+                               linewidth = zero_lwd) else NULL) +
     geom_ribbon(aes(ymin = lower, ymax = upper, fill = act),
                 alpha = ribbon_alpha, colour = NA) +
     geom_line(aes(y = median, colour = act), linewidth = 0.8)
@@ -415,7 +433,8 @@ rate_panel <- function() {
           plot.margin     = margin(t = 5, r = 7, b = 4, l = 4))
 }
 
-build_figure_split <- function(x_lo, x_hi, show_range = FALSE) {
+build_figure_split <- function(x_lo, x_hi, show_range = FALSE, zero_line = FALSE,
+                               anno_col = "black", anno_text_col = anno_col) {
   trim_a <- function(df) df[df$x >= x_lo & df$x <= a_x_max, , drop = FALSE]
   as_act <- function(d) {
     d$act <- factor(ifelse(grepl("TRA", as.character(d$panel)), "TRA", "TBA"),
@@ -429,13 +448,16 @@ build_figure_split <- function(x_lo, x_hi, show_range = FALSE) {
   p_lab <- activity_panel(cur(c("Lab TRA", "Lab TBA")),
                           as_act(trim_a(overlay_a)), x_lo, x_hi,
                           "Laboratory activity (%)", with_legend = TRUE,
-                          ref = tba_of("Field TBA")) +
+                          ref = tba_of("Field TBA"), zero_line = zero_line,
+                          anno_col = anno_col) +
     labs(tag = "A")
   p_fld <- activity_panel(cur(c("Lab TRA", "Field TBA")), NULL, x_lo, x_hi,
                           "Field activity (%)", with_legend = FALSE,
-                          ref = tba_of("Lab TBA")) +
+                          ref = tba_of("Lab TBA"), zero_line = zero_line,
+                          anno_col = anno_col) +
     labs(tag = "B")
-  p_eip <- eip_panel(x_lo, x_hi, show_range) + labs(tag = "D")
+  p_eip <- eip_panel(x_lo, x_hi, show_range, zero_line, anno_col, anno_text_col) +
+    labs(tag = "D")
 
   p_fld_inset <- p_fld +
     patchwork::inset_element(rate_panel() + labs(tag = "C"),
@@ -583,6 +605,20 @@ if (!is.null(eip$rate_cri)) {
                                       rng[1], rng[2], v$suffix))
     ggsave(out, p, width = 8, height = 9.5, dpi = 400, bg = "white")
     cat("wrote ", out, "\n", sep = "")
+
+    # _v2 and _v3: the reference line at the moment of infection, with the arrows
+    # meeting it, in one colour for both. Grey rather than a darker grey because
+    # baseline_colour (#444444, about grey27) already means the untreated arm in C
+    # and D, and annotation furniture should not land on a data colour.
+    for (ac in list(c("v2", "grey52", "grey35"), c("v3", "black", "black"))) {
+      p2   <- build_figure_split(rng[1], rng[2], show_range = v$range,
+                                 zero_line = TRUE, anno_col = ac[[2]],
+                                 anno_text_col = ac[[3]])
+      out2 <- file.path(out_dir, sprintf("fig_kernels_split_%s_x%g_%g%s.png",
+                                         ac[[1]], rng[1], rng[2], v$suffix))
+      ggsave(out2, p2, width = 8, height = 9.5, dpi = 400, bg = "white")
+      cat("wrote ", out2, "\n", sep = "")
+    }
   }
 } else {
   cat("No rate_cri in the EIP plot data: re-run analysis/04_plot_eip_posteriors.R",

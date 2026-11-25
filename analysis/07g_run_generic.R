@@ -244,7 +244,7 @@ SEED_BASE <- 20261011L
 # First year in which nets take the realisation's ITN draw, and so the first year
 # that differs between realisations; the history segment runs up to the end of the
 # year before.
-branch_year <- 2003L
+branch_year <- 2009L
 # Saved 2000-2021 histories, one file per region, reused by every later batch of
 # realisations (and by the fixed half-life runs). A history is reused only if its
 # parameters are identical to the ones this run would build, and it was built with

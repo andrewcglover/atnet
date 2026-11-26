@@ -1,0 +1,118 @@
+# Summaries of a projection run, for the figures and the manuscript's
+# numbers: totals and rates over the quoted campaign cycle (from the 2028
+# campaign to the day before the 2031 campaign) for each region, draws-table
+# row and arm; clinical cases averted against no future nets, paired within
+# rows; and the median [95% interval] across rows.
+#
+# GENERIC-GRID COPY of 09_summarise_projections.R. One change: there is no
+# National row. The nine cells are independent hypothetical settings, not
+# the regions of a country, so they are never added together. Everything
+# else -- the cycle, the per-cell totals and rates, the contrasts against
+# no future nets, the median [95% interval] -- is identical to 09, so the
+# grid and Mali are summarised the same way.
+#
+# Written to outputs/summaries/<first run folder's name>/:
+#   row_values.csv      totals and rates, one line per region, row and arm
+#   row_contrasts.csv   cases averted against no future nets, per row
+#   summary.csv         median [95% interval] across rows of both
+#
+# Reads the outputs only; it runs no simulations. Name one run folder, or
+# several when a figure's arms are spread over more than one run: each arm
+# is taken from the first folder named that holds it, so a folder named
+# later only fills gaps. The exponential main run, split by row:
+#   Rscript analysis/09_summarise_projections.R \
+#     outputs/projections_v2/mli_hldrawn_v2_main \
+#     outputs/projections_v2/mli_hldrawn_v2_main_161_640
+# The smooth-compact run, which holds the ATN arms alone, with the
+# comparator arms from the exponential run (they do not depend on the
+# decay form):
+#   Rscript analysis/09_summarise_projections.R \
+#     outputs/projections_v2/mli_hldrawn_v2_scmain \
+#     outputs/projections_v2/mli_hldrawn_v2_main \
+#     outputs/projections_v2/mli_hldrawn_v2_main_161_640
+# Run with the working directory at the root of the package.
+
+devtools::load_all(quiet = TRUE)
+
+args <- commandArgs(trailingOnly = TRUE)
+if (!length(args)) stop("Name at least one run folder.", call. = FALSE)
+run_dirs <- args
+settings <- readRDS(file.path(run_dirs[1], "settings.rds"))
+out_dir <- file.path("outputs", "summaries", basename(run_dirs[1]))
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Every folder must quote the same cycle and must have been run to the end
+# of it: a test run that stopped early would otherwise be summarised over
+# whatever days it happens to hold.
+check_run <- function(dir, cycle) {
+  s <- readRDS(file.path(dir, "settings.rds"))
+  if (!identical(sort(s$future_campaign_days),
+                 sort(settings$future_campaign_days))) {
+    stop(basename(dir), " has different campaign days from ",
+         basename(run_dirs[1]), ".", call. = FALSE)
+  }
+  if (s$end_day < cycle["to"]) {
+    stop(basename(dir), " stops on day ", s$end_day, ", before the cycle ends ",
+         "on day ", cycle["to"], ".", call. = FALSE)
+  }
+}
+
+# The model counts 365-day years from 1 Jan 2000 (timestep 1).
+model_date <- function(t) {
+  year <- 2000 + (t - 1) %/% 365
+  day <- as.Date("2001-01-01") + (t - 1) %% 365
+  paste(format(day, "%d %b"), year)
+}
+
+cycle <- campaign_cycle(settings$future_campaign_days)
+invisible(lapply(run_dirs, check_run, cycle = cycle))
+arms <- projection_arms()
+values <- projection_row_values(run_dirs, cycle["from"], cycle["to"])
+values <- values[values$arm %in% arms$arm, ]
+
+# NO NATIONAL ROW. The nine cells are independent hypothetical settings
+# (EIR 5/50/500 x pyrethroid resistance 50/80/95%), not the regions of a
+# country, so there is nothing to add them up into: a population-weighted
+# total across them would answer no question. They also all carry the same
+# nominal 1e6, so a "National" line would be a plain unweighted mean over
+# nine unrelated scenarios -- worse than absent, because it reads as a
+# headline. Each cell is reported on its own.
+#
+# This is the ONLY change from 09_summarise_projections.R, which keeps its
+# national block for Mali. Dropping it also removes the site-file read, so
+# GEN.rds's population table (history years only, 2000-2011) is never asked
+# for the 2029-2030 means that region_populations() hard-codes.
+contrasts <- arm_contrasts(values, comparator = "none")
+
+digits <- c(pfpr2to10_pct = 1, clin_inc_per1000 = 0, severe_inc_per1000 = 1,
+            net_use_pct = 1, annual_eir = 0, atn_exposed_pct = 1,
+            cases_averted_per1000 = 0, pct_cases_averted = 1)
+summary <- rbind(
+  summarise_rows(values, c("pfpr2to10_pct", "clin_inc_per1000",
+                           "severe_inc_per1000", "net_use_pct", "annual_eir",
+                           "atn_exposed_pct"), digits = digits),
+  summarise_rows(contrasts, c("cases_averted_per1000", "pct_cases_averted"),
+                 digits = digits)
+)
+summary$label <- arms$label[match(summary$arm, arms$arm)]
+summary <- summary[order(summary$region == "National", summary$region,
+                         match(summary$arm, arms$arm),
+                         match(summary$quantity, names(digits))), ]
+
+write.csv(values, file.path(out_dir, "row_values.csv"), row.names = FALSE)
+write.csv(contrasts, file.path(out_dir, "row_contrasts.csv"), row.names = FALSE)
+write.csv(summary, file.path(out_dir, "summary.csv"), row.names = FALSE)
+
+cat(sprintf("%s: %d row(s); cycle = days %d-%d (%s to %s)\n",
+            paste(basename(run_dirs), collapse = " + "),
+            length(unique(values$draw)), cycle["from"], cycle["to"],
+            model_date(cycle["from"]), model_date(cycle["to"])))
+cat("Median [95% interval] across rows; cases averted are against no future nets.\n")
+for (r in unique(summary$region)) {
+  s <- summary[summary$region == r, c("label", "quantity", "text")]
+  wide <- reshape(s, idvar = "label", timevar = "quantity", direction = "wide")
+  names(wide) <- sub("^text\\.", "", names(wide))
+  cat("\n", r, "\n", sep = "")
+  print(wide, row.names = FALSE, right = FALSE)
+}
+cat("\nWritten to", out_dir, "\n")
